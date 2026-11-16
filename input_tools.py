@@ -320,7 +320,7 @@ def classify_download(path):
         'TOS': r'\b(salary tax|salarytax|tos)\b', 'WHT': r'\b(withholding tax|withholdingtax|wht)\b',
         'GL': r'\b(gl|general ledger)\b', 'TB': r'\b(tb|trial balance)\b',
         'BANK': r'\b(bank|bank statement)\b', 'AR': r'\b(ar|receivables?|a r)\b',
-        'EXPENSE': r'\b(expenses?|purchase ledger)\b', 'TOI':r'\btoi\b', 'Info':r'\b(company info|info)\b',
+        'EXPENSE': r'\b(expenses?|purchase ledger)\b', 'TOI':r'\btoi(?:20\d{2}|\d{2})?\b', 'Info':r'\b(company info|info)\b',
     }
     found=[name for name,pattern in patterns.items() if re.search(pattern,text)]
     # Explicit purchase-ledger files are finance, not tax purchases.

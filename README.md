@@ -17,7 +17,8 @@ Check against a V5.1 workbook built from the same folder (needs LibreOffice):
     python3 -I verify.py output.xlsx Audit_Engine_V5.1_Python.xlsm
 
 TOI PDF export (Module 10) is available under TOIs Overview → Export TOI PDF
-using LibreOffice. The desktop Control Center is implemented in control_center.py.
+using Microsoft Excel on Mac/Windows, with LibreOffice as an optional alternative.
+The desktop Control Center is implemented in control_center.py.
 The VBA report builder (Module 11) remains separate from this workflow.
 
 Interface updates and Mac upgrade checks: see [UI_MAC_TEST.md](UI_MAC_TEST.md).
@@ -32,14 +33,15 @@ extraction. When updating an existing Mac installation, copy the new
 `bash Install_Update_Mac.command`. See UI_MAC_TEST.md for review requirements;
 PDF extraction does not automatically validate tax layouts or bank balances.
 
-### Download the Mac update
+### Download the desktop update
 
 [Download Tax-Audit-Mac-Update.zip](https://github.com/PR7-KH/Tax-Audit-2027/raw/refs/heads/main/downloads/Tax-Audit-Mac-Update.zip)
 
 Unzip it and copy all files inside `Tax-Audit-Mac-Update` into your existing
 app folder, replacing matching files. Keep your templates and company data.
-From Terminal in the app folder, run `bash Install_Update_Mac.command`, then
-launch normally. Back up your working folder first.
+On Mac, run `bash Install_Update_Mac.command` in Terminal in the app folder,
+then launch normally. On Windows, run Install_Update_Windows.bat and then
+Start_Control_Center_Windows.bat. Back up your working folder first.
 
 For future updates, rebuild the ZIP with `python3 scripts/package_mac_update.py`
 after changing any of the bundled files, and commit the refreshed ZIP alongside
@@ -52,13 +54,20 @@ in `.tax-audit-conversions.json`; use **Results → Open Excel** to inspect them
 The overview refreshes automatically and distinguishes conversion completion from
 reviewed/import-ready financial data. See UI_MAC_TEST.md for the full workflow.
 
-The update bundle now includes `toi_pdf.py` (six files total). Selecting a new
+The update bundle includes `toi_pdf.py` and Mac/Windows setup helpers (eight files total). Selecting a new
 company folder with no recognized target folders automatically organizes explicit
 filenames from its Download child. See UI_MAC_TEST.md for routing rules and the
-LibreOffice requirement for TOI PDF export.
+Microsoft Excel setup and Khmer font guidance for TOI PDF export.
 
 
 If a company has Info/Information plus Download, initial organization now proceeds
 normally. In Source overview, **Organize Download** starts an explicit incremental
 import; **Import log** only displays results. Existing files are never replaced.
 Select the parent company folder containing Download, rather than Download itself.
+
+
+TOI filenames with year suffixes (`TOI25`, `TOI26`, `TOI2025`) now route to TOI.
+For Khmer PDF export, choose Microsoft Excel, which uses the same PDF engine as
+the old VBA system. Workbook fonts lists source font references; install matching
+fonts such as Khmer OS Siemreap and restart Excel. Native Excel still needs your
+Mac/Windows test; it is not available in the cloud test machine.

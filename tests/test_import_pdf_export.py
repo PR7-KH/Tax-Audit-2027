@@ -134,7 +134,7 @@ class ToiPdfTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);toi=root/'TOI';toi.mkdir();source=toi/'company.xlsx';self.make_book(source)
             before=file_hash(source)
-            results=export_toi_pdfs(root,'1-4')
+            results=export_toi_pdfs(root,'1-4',renderer='libreoffice')
             self.assertEqual(results[0][2],'EXPORTED',results)
             with pdfplumber.open(results[0][3]) as pdf:
                 self.assertEqual(len(pdf.pages),2)
@@ -145,7 +145,7 @@ class ToiPdfTests(unittest.TestCase):
                 self.assertGreater(pdf.pages[0].width,pdf.pages[0].height)
                 self.assertLess(pdf.pages[1].width,pdf.pages[1].height)
             old=Path(results[0][3]).read_bytes()
-            again=export_toi_pdfs(root,'1-4')
+            again=export_toi_pdfs(root,'1-4',renderer='libreoffice')
             self.assertEqual(again[0][2],'EXPORTED')
             self.assertNotEqual(again[0][3],results[0][3])
             self.assertEqual(Path(results[0][3]).read_bytes(),old)

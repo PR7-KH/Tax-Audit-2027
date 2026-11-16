@@ -18,7 +18,7 @@ import calc  # noqa: E402
 import engine  # noqa: E402
 from input_tools import (source_inventory, validate_sources, convert_pdf, selected_pdfs,
                          batch_convert_pdfs, conversion_records, converted_output, target_files, view_pdfs, organize_downloads)
-from toi_pdf import export_toi_pdfs, parse_steps
+from toi_pdf import export_toi_pdfs, parse_steps, toi_workbook_fonts
 
 NAVY, SIDE, SIDE_HOVER, ACCENT = "#101f35", "#14263f", "#203a58", "#087f8c"
 GREEN, BG, CARD, TEXT, MUTED = "#167459", "#f0f4f8", "#ffffff", "#172b43", "#61748b"
@@ -260,6 +260,10 @@ class App(tk.Tk):
         tk.Label(self.toi_pdf_options, text="VBA Module 10 · steps", bg=BG, fg=TEXT).pack(side="left")
         self.toi_steps = tk.StringVar(value="1-17")
         tk.Entry(self.toi_pdf_options, textvariable=self.toi_steps, width=8).pack(side="left", padx=6)
+        self.toi_renderer = tk.StringVar(value="Microsoft Excel" if sys.platform in ("win32","darwin") else "LibreOffice")
+        ttk.Combobox(self.toi_pdf_options, textvariable=self.toi_renderer,
+                     values=("Microsoft Excel","LibreOffice"),state="readonly",width=16).pack(side="left",padx=4)
+        Btn(self.toi_pdf_options, "Workbook fonts", self.font_help, padx=8).pack(side="left",padx=3)
         Btn(self.toi_pdf_options, "Export TOI PDFs", self.export_toi_pdf).pack(side="left", padx=3)
         Btn(self.toi_pdf_options, "Open PDF folder", lambda: self.open_if(Path(self.folder.get())/"TOI_PDFs")).pack(side="left", padx=3)
         self.source_controls = tk.Frame(main, bg=BG)
@@ -547,7 +551,9 @@ class App(tk.Tk):
             self.page_label.config(text="")
             self.draw(["TOI PDF export"], [["Export selected steps from every TOI .xlsx file to TOI_PDFs."],
                       ["Use 1-17 for all steps, or a range such as 4-4."],
-                      ["Requires LibreOffice. Source workbooks and existing PDFs are preserved."]])
+                      ["Microsoft Excel is recommended for Khmer, matching the original VBA renderer."],
+                      ["Install matching workbook fonts (for example Khmer OS Siemreap); LibreOffice is an alternative."],
+                      ["Source workbooks and existing PDFs are preserved."]])
             return
         self.current["sheet"] = name
         self.set_picker(list(self.current["tables"]), name)
@@ -567,11 +573,17 @@ class App(tk.Tk):
             parse_steps(value)
         except ValueError as exc:
             self.status(str(exc));return
-        self.run_bg(self.job_toi_pdf,value)
+        backend = "excel" if self.toi_renderer.get()=="Microsoft Excel" else "libreoffice"
+        self.run_bg(self.job_toi_pdf,value,backend)
 
-    def job_toi_pdf(self,value):
+    def font_help(self):
+        if self.busy or not self.need_folder():
+            return
+        self.run_bg(lambda: ("toi_fonts",toi_workbook_fonts(self.job_settings[0])))
+
+    def job_toi_pdf(self,value,backend='auto'):
         rows = export_toi_pdfs(self.job_settings[0],value,
-                    progress=lambda done,total: self.q.put(("pdf_progress",done,total)))
+                    progress=lambda done,total: self.q.put(("pdf_progress",done,total)),renderer=backend)
         return ("toi_pdfs_done",rows)
 
     def job_tois(self):
@@ -914,6 +926,9 @@ class App(tk.Tk):
                         self.conversion_note = msg[1][0][2]
                     self.inventory = None
                     self.open_report("import_results" if len(msg)>2 and msg[2] else "sources")
+                elif kind == "toi_fonts":
+                    self.draw(["TOI workbook", "Font families referenced", "Note"],msg[1])
+                    self.status("On Mac, install matching fonts in Font Book and restart Excel. This lists workbook fonts; installed fonts are not verified.")
                 elif kind == "toi_pdfs_done":
                     self.draw(["TOI workbook", "Steps", "Result", "PDF file"],msg[1])
                     successful = sum(r[2]=="EXPORTED" for r in msg[1])

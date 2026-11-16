@@ -1,4 +1,4 @@
-"""Build the downloadable Mac update bundle from the current application files."""
+"""Build the downloadable desktop update bundle from the current application files."""
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -10,6 +10,8 @@ FILES = (
     'toi_pdf.py',
     'requirements.txt',
     'Install_Update_Mac.command',
+    'Install_Update_Windows.bat',
+    'Start_Control_Center_Windows.bat',
 )
 OUTPUT = ROOT / 'downloads' / 'Tax-Audit-Mac-Update.zip'
 

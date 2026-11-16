@@ -9,8 +9,9 @@ fi
 ./.venv/bin/python -m pip check
 echo 'Dependencies ready. Open Start_Control_Center_Mac.command to start the app.'
 
-if [ -x /Applications/LibreOffice.app/Contents/MacOS/soffice ] || command -v soffice >/dev/null 2>&1 || command -v libreoffice >/dev/null 2>&1; then
-    echo 'TOI PDF renderer detected.'
+if [ -d "/Applications/Microsoft Excel.app" ]; then
+    echo 'Microsoft Excel detected: recommended TOI PDF renderer.'
 else
-    echo 'For TOI PDF export, also install LibreOffice in Applications: https://www.libreoffice.org/download/download-libreoffice/'
+    echo 'TOI PDF export uses desktop Microsoft Excel by default. LibreOffice can be selected as an alternative.'
 fi
+echo 'For Khmer PDFs, install the workbook fonts in Font Book (for example Khmer OS Siemreap), then restart Excel.'

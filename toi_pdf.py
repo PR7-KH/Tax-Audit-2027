@@ -1,10 +1,13 @@
 """Port of V5.1 Module10 TOI PDF layout and multi-workbook export."""
 from copy import copy
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
+import warnings
 from openpyxl import load_workbook
 from openpyxl.worksheet.page import PageMargins
 from openpyxl.worksheet.properties import PageSetupProperties
@@ -41,6 +44,83 @@ def find_soffice():
     if mac.is_file():
         return str(mac)
     raise RuntimeError('TOI PDF export requires LibreOffice. Install LibreOffice in Applications, then retry. Source Excel files are unchanged.')
+
+
+def select_renderer(renderer='auto'):
+    if renderer not in ('auto','excel','libreoffice'):
+        raise ValueError('Choose Microsoft Excel or LibreOffice as the PDF renderer.')
+    return ('excel' if sys.platform in ('win32','darwin') else 'libreoffice') if renderer=='auto' else renderer
+
+
+@contextmanager
+def excel_application():
+    """Own a separate Excel instance; initialize COM on the Windows worker thread."""
+    if sys.platform not in ('win32','darwin'):
+        raise RuntimeError('Microsoft Excel automation needs Windows or Mac. Choose LibreOffice on this platform.')
+    app=com=None
+    try:
+        try:
+            if sys.platform=='win32':
+                import pythoncom
+                com=pythoncom
+                com.CoInitialize()
+            import xlwings as xw
+            app=xw.App(visible=False,add_book=False)
+            app.display_alerts=False
+            app.screen_updating=False
+        except ImportError as exc:
+            raise RuntimeError('Excel PDF export needs the Python Excel bridge. Run Install_Update_Windows.bat or bash Install_Update_Mac.command once, then restart. No Excel add-in is required.') from exc
+        except Exception as exc:
+            raise RuntimeError('Cannot start Microsoft Excel for PDF export. Open desktop Excel once and finish setup. On Mac, allow the launching app to control Excel in Privacy & Security > Automation. '+str(exc)) from exc
+        yield app
+    finally:
+        try:
+            if app is not None:
+                try:
+                    app.quit()
+                except Exception:
+                    warnings.warn('The export Excel instance could not close automatically; close its unused window manually.',RuntimeWarning)
+        finally:
+            if com is not None:
+                com.CoUninitialize()
+
+
+def render_excel(app, prepared, pdf, selected):
+    book=None
+    try:
+        book=app.books.open(str(prepared),update_links=False,read_only=True)
+        for name in selected:
+            try:
+                book.sheets[name].range('E:I').columns.autofit()
+            except Exception:
+                pass  # Module10 also tolerates AutoFit on protected/unsupported columns.
+        app.calculate()
+        book.to_pdf(path=str(pdf),include=selected,quality='standard',show=False)
+    finally:
+        if book is not None:
+            book.close()  # discard temporary edits; never open the original in Excel
+
+
+def toi_workbook_fonts(company_folder):
+    root=Path(company_folder)
+    toi=next((p for p in root.iterdir() if p.is_dir() and p.name.casefold()=='toi'),None)
+    if toi is None:
+        raise ValueError('No TOI folder found.')
+    rows=[]
+    for source in sorted(toi.glob('*')):
+        if source.suffix.lower()!='.xlsx' or source.name.startswith(('.','~$')):
+            continue
+        try:
+            wb=load_workbook(source,read_only=True,keep_links=False)
+            try:
+                names=sorted({f.name for f in wb._fonts if f.name})
+            finally:
+                wb.close()
+            rows.append([source.name,', '.join(names),
+                         'Workbook font references only; install matching fonts before export.'])
+        except Exception as exc:
+            rows.append([source.name,'','ERROR: '+str(exc).splitlines()[0]])
+    return rows
 
 
 def prepare_workbook(source, output, start, end):
@@ -92,7 +172,7 @@ def prepare_workbook(source, output, start, end):
     return [ws.title for ws in selected]
 
 
-def export_toi_pdfs(company_folder, step_range='1-17', progress=None):
+def export_toi_pdfs(company_folder, step_range='1-17', progress=None, renderer='auto'):
     start,end=parse_steps(step_range)
     root=Path(company_folder)
     toi=next((p for p in root.iterdir() if p.is_dir() and p.name.casefold()=='toi'),None)
@@ -101,39 +181,45 @@ def export_toi_pdfs(company_folder, step_range='1-17', progress=None):
     files=sorted(p for p in toi.glob('*') if p.suffix.lower()=='.xlsx' and not p.name.startswith(('.','~$')))
     if not files:
         raise ValueError('No .xlsx workbooks found directly inside TOI.')
-    soffice=find_soffice()
+    backend=select_renderer(renderer)
+    soffice=find_soffice() if backend=='libreoffice' else None
     destination=root/'TOI_PDFs';destination.mkdir(exist_ok=True)
     results=[]
-    for index,source in enumerate(files,1):
-        try:
-            with tempfile.TemporaryDirectory(prefix='toi-pdf-') as temp:
-                temp=Path(temp);prepared=temp/'prepared.xlsx';out=temp/'pdf';out.mkdir()
-                selected=prepare_workbook(source,prepared,start,end)
-                profile=(temp/'profile').as_uri()
-                command=[soffice,'-env:UserInstallation='+profile,'--headless','--convert-to','pdf:calc_pdf_Export',
-                         '--outdir',str(out),str(prepared)]
-                completed=subprocess.run(command,capture_output=True,text=True,timeout=180,check=False)
-                pdf=out/'prepared.pdf'
-                if completed.returncode or not pdf.is_file() or pdf.stat().st_size<5 or pdf.read_bytes()[:5]!=b'%PDF-':
-                    raise RuntimeError('LibreOffice did not produce a PDF. '+(completed.stderr or completed.stdout).strip()[:500])
-                base=f'{source.stem}_TOI_Report_{start}-{end}'
-                target=destination/(base+'.pdf');version=2
-                # Exclusive creation preserves previous PDFs, including another export running concurrently.
-                while True:
-                    try:
-                        with target.open('xb') as output:
-                            try:
-                                with pdf.open('rb') as stream:
-                                    shutil.copyfileobj(stream,output)
-                            except BaseException:
-                                target.unlink(missing_ok=True)
-                                raise
-                        break
-                    except FileExistsError:
-                        target=destination/f'{base}_{version}.pdf';version+=1
-                results.append([source.name,', '.join(selected),'EXPORTED',str(target)])
-        except Exception as exc:
-            results.append([source.name,f'{start}-{end}','ERROR: '+str(exc).splitlines()[0],''])
-        if progress:
-            progress(index,len(files))
+    with (excel_application() if backend=='excel' else nullcontext(None)) as app:
+        for index,source in enumerate(files,1):
+            try:
+                with tempfile.TemporaryDirectory(prefix='toi-pdf-') as temp:
+                    temp=Path(temp);prepared=temp/'prepared.xlsx';out=temp/'pdf';out.mkdir()
+                    selected=prepare_workbook(source,prepared,start,end)
+                    pdf=out/'prepared.pdf'
+                    if backend=='excel':
+                        render_excel(app,prepared,pdf,selected)
+                    else:
+                        profile=(temp/'profile').as_uri()
+                        command=[soffice,'-env:UserInstallation='+profile,'--headless','--convert-to','pdf:calc_pdf_Export',
+                                 '--outdir',str(out),str(prepared)]
+                        completed=subprocess.run(command,capture_output=True,text=True,timeout=180,check=False)
+                        if completed.returncode:
+                            raise RuntimeError('LibreOffice export failed: '+(completed.stderr or completed.stdout).strip()[:500])
+                    if not pdf.is_file() or pdf.stat().st_size<5 or pdf.read_bytes()[:5]!=b'%PDF-':
+                        raise RuntimeError(f'{backend} did not produce a valid PDF.')
+                    base=f'{source.stem}_TOI_Report_{start}-{end}'
+                    target=destination/(base+'.pdf');version=2
+                    while True:
+                        try:
+                            with target.open('xb') as output:
+                                try:
+                                    with pdf.open('rb') as stream:
+                                        shutil.copyfileobj(stream,output)
+                                except BaseException:
+                                    target.unlink(missing_ok=True)
+                                    raise
+                            break
+                        except FileExistsError:
+                            target=destination/f'{base}_{version}.pdf';version+=1
+                    results.append([source.name,', '.join(selected),'EXPORTED',str(target)])
+            except Exception as exc:
+                results.append([source.name,f'{start}-{end}','ERROR: '+str(exc).splitlines()[0],''])
+            if progress:
+                progress(index,len(files))
     return results

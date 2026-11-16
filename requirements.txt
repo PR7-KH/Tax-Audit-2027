@@ -1,3 +1,4 @@
 openpyxl==3.1.5
 XlsxWriter==3.2.9
 pdfplumber==0.11.10
+xlwings==0.33.22; sys_platform == "darwin" or sys_platform == "win32"
