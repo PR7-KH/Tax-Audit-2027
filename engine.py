@@ -511,9 +511,9 @@ def check_finance(company_folder):
         items = sorted(p for p in folder.rglob("*") if p.is_file() and not p.name.startswith((".", "~$"))
                        and p.suffix.lower() in FIN_EXT)
         exts = sorted({p.suffix.lower() for p in items})
-        status = "Ready" if items else "No files"
+        status = "Files found; validate contents" if items else "No files"
         if any(p.suffix.lower() == ".pdf" for p in items):
-            status = "Ready, PDF needs profile check"
+            status = "Not ready: convert PDF and review"
         summary.append((label, folder.name, len(items), ", ".join(exts), status))
         for p in items:
             sheets, rows, note = "", "", ""
@@ -522,12 +522,14 @@ def check_finance(company_folder):
                     wb = load_workbook(p, read_only=True, data_only=True)
                     sheets = ", ".join(wb.sheetnames[:4])
                     rows = wb.worksheets[0].max_row
+                    if "Conversion Review" in wb.sheetnames:
+                        note = "REVIEW: PDF extraction; check balances and map columns"
                     wb.close()
                 elif p.suffix.lower() == ".csv":
                     with open(p, "r", encoding="utf-8-sig", errors="replace") as f:
                         rows = sum(1 for _ in f)
                 elif p.suffix.lower() == ".pdf":
-                    note = "PDF: text extraction not checked yet"
+                    note = "NOT READY: convert PDF to Excel; review and map columns"
                 elif p.suffix.lower() == ".xls":
                     note = "Old .xls: save as .xlsx"
             except Exception as exc:
@@ -570,14 +572,15 @@ def check_sources(company_folder):
 SECTIONS = {
     "consolidate": ("Consolidated data (PR, SR, TOS, WHT)", {"PR", "SR", "TOS", "WHT"}),
     "summary": ("Summary MTR", {"Summary MTR"}),
+    "tois": ("TOIs Overview", {"TOI", "FULL TOI"}),
     "toi": ("TOI compare", {"TOI"}),
     "fulltoi": ("FULL TOI", {"FULL TOI"}),
-    "mtr": ("MTR detail (all four)", {"MTR_PR", "MTR_SR", "MTR_TOS", "MTR_WHT"}),
+    "mtr": ("MTR detail and summary", {"MTR_PR", "MTR_SR", "MTR_TOS", "MTR_WHT", "Summary MTR"}),
     "mtr_pr": ("MTR detail: PR", {"MTR_PR"}),
     "mtr_sr": ("MTR detail: SR", {"MTR_SR"}),
     "mtr_tos": ("MTR detail: TOS", {"MTR_TOS"}),
     "mtr_wht": ("MTR detail: WHT", {"MTR_WHT"}),
-    "tps": ("Tax Paid Summary", {"Tax Paid Summary", "Company Info"}),
+    "tps": ("Tax Paid Summary", {"Tax Paid Summary"}),
     "dashboard": ("Audit Dashboard", {"Audit Dashboard", "ADT", "TOI", "Company Info"}),
 }
 

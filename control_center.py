@@ -2,7 +2,7 @@
 
 Click a report to VIEW it. Nothing is written to disk until you press an Export button.
 """
-from collections import OrderedDict, Counter
+from collections import OrderedDict
 import queue
 import re
 import subprocess
@@ -16,6 +16,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import calc  # noqa: E402
 import engine  # noqa: E402
+from input_tools import source_inventory, validate_sources, convert_pdf
 
 NAVY, SIDE, SIDE_HOVER, ACCENT = "#101f35", "#14263f", "#203a58", "#087f8c"
 GREEN, BG, CARD, TEXT, MUTED = "#167459", "#f0f4f8", "#ffffff", "#172b43", "#61748b"
@@ -26,15 +27,9 @@ NUMBER = re.compile(r"^-?[\d,]+(\.\d+)?%?$")
 # (kind, key, label)   kind: group | item | sub
 MENU = [
     ("group", "", "TAX AUDIT"),
-    ("item", "sources", "Source overview"),
-    ("sub", "source_files", "File names & formats"),
-    ("sub", "check_tax", "Validate tax files"),
-    ("item", "build_all", "Build all data"),
     ("item", "consolidate", "Consolidated data"),
-    ("item", "summary", "Summary MTR"),
     ("item", "mtr", "MTR detail"),
-    ("item", "toi", "TOI compare"),
-    ("item", "fulltoi", "FULL TOI"),
+    ("item", "tois", "TOIs Overview"),
     ("item", "tps", "Tax Paid Summary"),
     ("item", "dashboard", "Audit Dashboard"),
     ("group", "", "FINANCIAL AUDIT"),
@@ -49,6 +44,8 @@ MENU = [
     ("group", "", "SYSTEM"),
     ("item", "log", "Processing log"),
 ]
+ACTION_TITLES = {"sources": "Source overview", "source_files": "File details",
+                 "check_tax": "Validate source files", "build_all": "Build all data"}
 SUBTITLE = {
     "sources": "Company file counts by tax year and financial folder. No workbook contents are opened.",
     "check_tax": "Reads every monthly tax file with the same reader as V5.1 and reports problems before any build.",
@@ -85,7 +82,7 @@ def report_row_tag(values, index, numbered=False):
     text = [str(v).strip().casefold() for v in content if v not in (None, "")]
     if any(v.startswith(("error:", "cannot open:", "#ref!", "#value!", "#div/0!")) for v in text):
         return "error"
-    if any(v in ("missing", "empty", "folder not found") for v in text):
+    if any(v in ("missing", "empty", "folder not found") or v.startswith(("not ready:", "review:")) for v in text):
         return "warning"
     if text and (text[0] in ("total", "grand total") or text[0].startswith(("subtotal ", "year "))):
         return "total"
@@ -94,31 +91,6 @@ def report_row_tag(values, index, numbered=False):
     return "odd" if index % 2 else "even"
 
 
-def source_inventory(folder):
-    """Fast counts only: do not open thousands of workbooks on folder selection."""
-    root = Path(folder)
-    rows = []
-    for tax in engine.cons.LAYOUTS:
-        directory = engine.find_dir(root, tax)
-        paths = list(engine.cons.files_in(directory)) if directory else []
-        counts = Counter(year for year, path in paths)
-        for year, count in sorted(counts.items()):
-            rows.append([tax, year, count, "Found", "; ".join(f"{p.name} [Excel]" for y, p in paths if y == year)])
-        if not counts:
-            rows.append([tax, "—", 0, "Missing" if directory is None else "Empty", ""])
-    for name in ("TOI", "Info"):
-        directory = engine.find_dir(root, name)
-        files = [p for p in directory.glob("*.xlsx") if not p.name.startswith((".", "~$"))] if directory else []
-        count = len(files)
-        rows.append([name, "All", count, "Found" if count else "Missing", "; ".join(f"{p.name} [Excel]" for p in sorted(files))])
-    for key, (label, _) in engine.FINANCE_FOLDERS.items():
-        directory = engine.finance_folder(root, key)
-        files = sorted(p for p in directory.rglob("*") if p.is_file() and
-                    p.suffix.lower() in engine.FIN_EXT and not any(
-                        part.startswith((".", "~$")) for part in p.relative_to(directory).parts)) if directory else []
-        rows.append([label, "All", len(files), "Found" if files else "No files",
-                     "; ".join(f"{p.relative_to(directory)} [{p.suffix[1:].upper()}]" for p in files)])
-    return rows
 
 
 class Btn(tk.Label):
@@ -163,6 +135,9 @@ class App(tk.Tk):
         self.zoom = 90
         self.fit_columns = True
         self.inventory = None
+        self.search_hits = []
+        self.search_index = -1
+        self.search_target = None
         self.last_table = None
         self.setup_styles()
         self.build_header()
@@ -210,18 +185,20 @@ class App(tk.Tk):
                  relief="flat", highlightthickness=1, highlightbackground=LINE,
                  highlightcolor=ACCENT, font=(FONT, 12)).pack(side="left", fill="x", expand=True, padx=10, ipady=5)
         Btn(row, "Select folder", self.pick_folder).pack(side="left", padx=(0, 6))
+        Btn(row, "Source overview", lambda: self.open_report("sources"), padx=9).pack(side="left", padx=(0, 4))
+        Btn(row, "Build all data", lambda: self.open_report("build_all"), padx=9).pack(side="left", padx=(0, 4))
         Btn(row, "Open folder", lambda: self.open_if(self.folder.get()), color="#5d7391").pack(side="left", padx=(0, 6))
         Btn(row, "Refresh", self.refresh, color="#5d7391").pack(side="left")
 
     def build_body(self):
         body = self.body = tk.Frame(self, bg=BG)
         body.pack(fill="both", expand=True)
-        side = self.sidebar = tk.Frame(body, bg=SIDE, width=180)
+        side = self.sidebar = tk.Frame(body, bg=SIDE, width=225)
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
-        canvas = tk.Canvas(side, bg=SIDE, highlightthickness=0, width=180)
+        canvas = tk.Canvas(side, bg=SIDE, highlightthickness=0, width=225)
         inner = tk.Frame(canvas, bg=SIDE)
-        window = canvas.create_window((0, 0), window=inner, anchor="nw", width=180)
+        window = canvas.create_window((0, 0), window=inner, anchor="nw", width=225)
         scroll = ttk.Scrollbar(side, orient="vertical", command=canvas.yview)
         scroll.pack(side="right", fill="y")
         canvas.configure(yscrollcommand=scroll.set)
@@ -273,6 +250,21 @@ class App(tk.Tk):
         self.months_label.pack(side="left")
         tk.Spinbox(self.tax_options, from_=1, to=12, width=4, textvariable=self.months).pack(side="left", padx=8)
         Btn(self.tax_options, "Apply", self.apply_months).pack(side="left")
+
+        self.source_controls = tk.Frame(main, bg=BG)
+        Btn(self.source_controls, "Format summary", lambda: self.open_report("sources")).pack(side="left", padx=3)
+        Btn(self.source_controls, "Validate files", lambda: self.open_report("check_tax")).pack(side="left", padx=3)
+        Btn(self.source_controls, "Convert PDF to Excel", self.pick_pdf).pack(side="left", padx=3)
+        self.search_controls = tk.Frame(main, bg=BG)
+        tk.Label(self.search_controls, text="Search all tax sheets", bg=BG, fg=TEXT).pack(side="left")
+        self.search_query = tk.StringVar()
+        search_entry = tk.Entry(self.search_controls, textvariable=self.search_query, width=30)
+        search_entry.pack(side="left", padx=6)
+        search_entry.bind("<Return>", lambda event: self.find_text())
+        Btn(self.search_controls, "Find", self.find_text).pack(side="left", padx=2)
+        Btn(self.search_controls, "Next match", self.next_match).pack(side="left", padx=2)
+        self.search_label = tk.Label(self.search_controls, text="", bg=BG, fg=MUTED)
+        self.search_label.pack(side="left", padx=6)
 
         self.picker = tk.Frame(main, bg=BG)
         self.picker.pack(fill="x", pady=(3, 0))
@@ -356,6 +348,8 @@ class App(tk.Tk):
         self.sheet_pages.clear()
         self.sheet_dimensions.clear()
         self.inventory = None
+        self.search_hits = []
+        self.search_target = None
 
     def refresh(self):
         if self.busy:
@@ -483,6 +477,14 @@ class App(tk.Tk):
             label = self.built[1][name]["D9"].value
             self.months_label.config(text=f"Newest year: {label} · older year: 12 months")
         self.page_label.config(text=f"Page {page+1} / {max(1, (total+self.page_size-1)//self.page_size)}")
+        if self.search_target and self.search_target[0] == name:
+            target = self.search_target[1]
+            for item in self.tree.get_children():
+                if int(self.tree.item(item, "values")[0]) == target:
+                    self.tree.selection_set(item)
+                    self.tree.focus(item)
+                    self.tree.see(item)
+                    break
         self.status(f"{name}: rows {page*self.page_size+1:,}–{min(total,(page+1)*self.page_size):,} of {total:,}. All rows available using Next / Previous.")
 
     def set_picker(self, names, active):
@@ -491,7 +493,7 @@ class App(tk.Tk):
         if len(names) < 2:
             return
         for n in names:
-            b = Btn(self.picker, n, lambda n=n: self.show_sheet(n), color=ACCENT if n == active else "#9fb2cc",
+            b = Btn(self.picker, "TOI compare" if n == "TOI" else n, lambda n=n: self.show_sheet(n), color=ACCENT if n == active else "#9fb2cc",
                     hover=NAVY, padx=12, pady=4)
             b.pack(side="left", padx=(0, 6))
 
@@ -508,16 +510,75 @@ class App(tk.Tk):
         else:
             self.run_bg(self.job_page, name, page)
 
+    def pick_pdf(self):
+        if self.busy:
+            return
+        source = filedialog.askopenfilename(title="Select a text PDF to extract", filetypes=[("PDF", "*.pdf")])
+        if not source:
+            return
+        output = filedialog.asksaveasfilename(title="Save extracted workbook for review", defaultextension=".xlsx",
+                    initialdir=str(Path(source).parent), initialfile=Path(source).stem+"_review.xlsx",
+                    filetypes=[("Excel", "*.xlsx")])
+        if output:
+            self.run_bg(lambda: ("converted", convert_pdf(source, output)))
+
+    def find_text(self):
+        if self.busy or not self.current or self.current.get("key") != "consolidate":
+            return
+        query = self.search_query.get().strip()
+        self.tree.selection_remove(self.tree.selection())
+        self.search_hits = []
+        self.search_target = None
+        self.search_index = -1
+        if not query:
+            self.search_label.config(text="Enter a value to find")
+            return
+        self.run_bg(self.job_search, query, list(self.current["tables"]))
+
+    def job_search(self, query, names):
+        wb, cal = self.built[1], self.built[3]
+        needle = query.casefold()
+        hits = []
+        for name in names:
+            ws = wb[name]
+            # All rows, not just the loaded preview page.
+            ncols, nrows = ws.max_column, ws.max_row
+            for row in ws.iter_rows(min_row=1, max_row=nrows, max_col=ncols):
+                if any(needle in str(cell.value if cell.data_type != 'f' else cal.value(name, cell.row, cell.column)).casefold()
+                       or needle in calc.display(cal.value(name, cell.row, cell.column), cell.number_format).casefold()
+                       for cell in row if cell.value is not None):
+                    hits.append((name, row[0].row))
+        return ("search", hits)
+
+    def next_match(self):
+        if self.busy or not self.search_hits:
+            return
+        self.search_index = (self.search_index + 1) % len(self.search_hits)
+        name, row = self.search_hits[self.search_index]
+        self.search_target = (name, row)
+        self.sheet_pages[name] = (row-1)//self.page_size
+        self.search_label.config(text=f"{self.search_index+1} / {len(self.search_hits)} matching rows · {name} row {row}")
+        self.show_sheet(name)
+
     # ------------------------------------------------------------ opening a report
     def open_report(self, key):
         if self.busy:
             self.status("Please wait, still working…")
             return
-        label = next(m[2] for m in MENU if m[1] == key)
+        label = ACTION_TITLES.get(key) or next(m[2] for m in MENU if m[1] == key)
         self.mark_active(key)
         self.title_lbl.config(text=label.strip())
         self.sub_lbl.config(text=SUBTITLE.get(key, ""))
         self.current = {"key": key}
+        self.search_controls.pack_forget()
+        self.source_controls.pack_forget()
+        self.search_target = None
+        self.search_hits = []
+        self.search_label.config(text="")
+        if key == "consolidate":
+            self.search_controls.pack(fill="x", before=self.picker, pady=3)
+        if key in ("sources", "source_files", "check_tax"):
+            self.source_controls.pack(fill="x", before=self.picker, pady=3)
         self.page_label.config(text="")
         self.tax_options.pack_forget()
         self.dashboard_options.pack_forget()
@@ -606,7 +667,7 @@ class App(tk.Tk):
         folder = self.job_settings[0]
         if self.inventory is None or self.inventory[0] != folder:
             self.inventory = (folder, source_inventory(folder))
-        return ("table", ["Source", "Year / scope", "Files", "Status", "File names / format"], self.inventory[1],
+        return ("table", ["Source", "Year / scope", "Files", "Status", "Formats"], self.inventory[1],
                 "File inventory only. Use Validate tax files to check headings, values and formula caches.", False)
 
     def job_source_files(self):
@@ -623,10 +684,10 @@ class App(tk.Tk):
                 f"{len(rows):,} files found. Inventory only; PDF/CSV presence does not imply tax import support.", False)
 
     def job_check_tax(self):
-        rows = engine.check_sources(self.job_settings[0])
+        rows = validate_sources(self.job_settings[0])
         bad = sum(1 for r in rows if r[4] != "READY")
         return ("table", ["Tax", "Year", "Source file", "Rows", "Result"], [list(r) for r in rows],
-                f"{len(rows) - bad} of {len(rows)} items ready.", False)
+                f"{len(rows) - bad} READY tax entries; all other rows require the action shown.", False)
 
     def job_finance(self, key):
         summary, files = engine.check_finance(self.job_settings[0])
@@ -656,6 +717,8 @@ class App(tk.Tk):
                     f"Built {len(rows)} sheets in memory. Open each report on the left, or press Export everything.",
                     True)
         names = [n for n in wb.sheetnames if n in engine.SECTIONS[key][1]]
+        if key == "mtr":
+            names = [n for n in ("MTR_PR", "MTR_SR", "MTR_TOS", "MTR_WHT", "Summary MTR") if n in names]
         tables = dict.fromkeys(names)
         return ("sheets", key, tables)
 
@@ -667,7 +730,22 @@ class App(tk.Tk):
                 self.busy = False
                 self.config(cursor="")
                 kind = msg[0]
-                if kind == "page":
+                if kind == "converted":
+                    result = msg[1]
+                    self.inventory = None
+                    self.status("Extracted workbook saved for manual review: " + result['output'])
+                    messagebox.showinfo("PDF extraction complete — review required",
+                        f"{result['tables']} tables and {result['text_pages']} text pages saved.\n\n"
+                        "Compare balances and every page with the PDF, correct data and map columns. "
+                        "This file is not automatically approved for tax import or reconciliation.\n\n" + result['output'])
+                elif kind == "search":
+                    self.search_hits = msg[1]
+                    self.search_index = -1
+                    if self.search_hits:
+                        self.next_match()
+                    else:
+                        self.search_label.config(text="No matches in any tax sheet")
+                elif kind == "page":
                     self.page_cache[(msg[1], msg[2])] = msg
                     while len(self.page_cache) > 32:
                         self.page_cache.popitem(last=False)

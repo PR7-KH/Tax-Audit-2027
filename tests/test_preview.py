@@ -38,9 +38,9 @@ class PreviewTests(unittest.TestCase):
             (root / 'GL' / 'ledger.xlsx').touch()
             with patch.object(ui.engine, 'load_workbook', side_effect=AssertionError('must not open')):
                 rows = ui.source_inventory(root)
-            self.assertIn(['PR', '2025', 12, 'Found'], [r[:4] for r in rows])
-            self.assertIn(['PR', '2026', 13, 'Found'], [r[:4] for r in rows])
-            self.assertIn(['General ledger', 'All', 1, 'Found'], [r[:4] for r in rows])
+            self.assertIn(['PR', '2025', 12, 'Found; content not validated'], [r[:4] for r in rows])
+            self.assertIn(['PR', '2026', 13, 'Found; content not validated'], [r[:4] for r in rows])
+            self.assertIn(['General ledger', 'All', 1, 'Found; content not validated'], [r[:4] for r in rows])
 
     def test_all_rows_available_and_formula_values_preserved(self):
         wb = Workbook(); ws = wb.active; ws.title = 'PR'

@@ -24,3 +24,9 @@ Tax Paid Summary uses all 12 months of the older Info year and `--months` of the
 newer year. Both year cells (Sheet2!B3 and Sheet3!B3) must be valid and different.
 Consolidated tax sheets now put grand/year totals above their transactions;
 file-level subtotals remain available in MTR detail.
+
+The latest interface adds all-row consolidated search and local text-PDF
+extraction. When updating an existing Mac installation, copy the new
+`input_tools.py` and dependency files as well, then run
+`bash Install_Update_Mac.command`. See UI_MAC_TEST.md for review requirements;
+PDF extraction does not automatically validate tax layouts or bank balances.
