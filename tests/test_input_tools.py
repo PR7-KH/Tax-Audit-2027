@@ -56,12 +56,13 @@ class InputToolsTests(unittest.TestCase):
             (year/'return.pdf').touch()
             row=next(r for r in source_inventory(root) if r[:2]==['PR','2025'])
             self.assertEqual(row[2],1)
-            self.assertIn('convert PDF',row[3])
+            self.assertIn('need conversion',row[3])
             self.assertTrue(any(r[2]=='return.pdf' and 'NOT READY' in r[4] for r in validate_sources(root)))
 
     def test_text_pdf_extracts_table_and_preserves_literal_values(self):
         with tempfile.TemporaryDirectory() as folder:
-            source=Path(folder)/'bank.pdf'; output=Path(folder)/'bank.xlsx'
+            bank=Path(folder)/'Bank'; bank.mkdir()
+            source=bank/'bank.pdf'; output=bank/'bank.xlsx'
             write_pdf(source); original=source.read_bytes()
             result=convert_pdf(source,output)
             self.assertEqual(result['tables'],1)

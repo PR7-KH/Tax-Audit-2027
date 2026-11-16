@@ -508,7 +508,7 @@ def check_finance(company_folder):
         if folder is None:
             summary.append((label, "", 0, "", "Optional" if key in ("AR", "EXPENSE") else "Folder not found"))
             continue
-        items = sorted(p for p in folder.rglob("*") if p.is_file() and not p.name.startswith((".", "~$"))
+        items = sorted(p for p in folder.rglob("*") if p.is_file() and not any(part.startswith((".", "~$")) for part in p.relative_to(folder).parts)
                        and p.suffix.lower() in FIN_EXT)
         exts = sorted({p.suffix.lower() for p in items})
         status = "Files found; validate contents" if items else "No files"
@@ -575,7 +575,7 @@ SECTIONS = {
     "tois": ("TOIs Overview", {"TOI", "FULL TOI"}),
     "toi": ("TOI compare", {"TOI"}),
     "fulltoi": ("FULL TOI", {"FULL TOI"}),
-    "mtr": ("MTR detail and summary", {"MTR_PR", "MTR_SR", "MTR_TOS", "MTR_WHT", "Summary MTR"}),
+    "mtr": ("MTR Overview", {"MTR_PR", "MTR_SR", "MTR_TOS", "MTR_WHT", "Summary MTR"}),
     "mtr_pr": ("MTR detail: PR", {"MTR_PR"}),
     "mtr_sr": ("MTR detail: SR", {"MTR_SR"}),
     "mtr_tos": ("MTR detail: TOS", {"MTR_TOS"}),

@@ -132,8 +132,9 @@ class ReportLayoutTests(unittest.TestCase):
 
     def test_source_file_names_and_types(self):
         with tempfile.TemporaryDirectory() as folder:
+            directory=Path(folder)/'GL'; directory.mkdir()
             for name in ('ledger.xlsx','bank.pdf','sales.csv','~$lock.xlsx'):
-                (Path(folder)/name).touch()
+                (directory/name).touch()
             app=Mock(); app.job_settings=(folder,3,False)
             msg=ui.App.job_source_files(app)
             self.assertEqual({r[3] for r in msg[2]}, {'Excel','PDF','CSV'})

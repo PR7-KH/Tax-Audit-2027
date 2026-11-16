@@ -16,7 +16,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import calc  # noqa: E402
 import engine  # noqa: E402
-from input_tools import source_inventory, validate_sources, convert_pdf
+from input_tools import (source_inventory, validate_sources, convert_pdf, selected_pdfs,
+                         batch_convert_pdfs, conversion_records, converted_output, target_files, view_pdfs)
 
 NAVY, SIDE, SIDE_HOVER, ACCENT = "#101f35", "#14263f", "#203a58", "#087f8c"
 GREEN, BG, CARD, TEXT, MUTED = "#167459", "#f0f4f8", "#ffffff", "#172b43", "#61748b"
@@ -27,11 +28,11 @@ NUMBER = re.compile(r"^-?[\d,]+(\.\d+)?%?$")
 # (kind, key, label)   kind: group | item | sub
 MENU = [
     ("group", "", "TAX AUDIT"),
-    ("item", "consolidate", "Consolidated data"),
-    ("item", "mtr", "MTR detail"),
-    ("item", "tois", "TOIs Overview"),
-    ("item", "tps", "Tax Paid Summary"),
     ("item", "dashboard", "Audit Dashboard"),
+    ("item", "tois", "TOIs Overview"),
+    ("item", "mtr", "MTR Overview"),
+    ("item", "consolidate", "Consolidated data"),
+    ("item", "tps", "Tax Paid Summary"),
     ("group", "", "FINANCIAL AUDIT"),
     ("item", "check_fin", "Check source folders"),
     ("item", "fin_SALES", "Sales"),
@@ -44,7 +45,7 @@ MENU = [
     ("group", "", "SYSTEM"),
     ("item", "log", "Processing log"),
 ]
-ACTION_TITLES = {"sources": "Source overview", "source_files": "File details",
+ACTION_TITLES = {"conversion_results": "PDF conversion results","sources": "Source overview", "source_files": "File details",
                  "check_tax": "Validate source files", "build_all": "Build all data"}
 SUBTITLE = {
     "sources": "Company file counts by tax year and financial folder. No workbook contents are opened.",
@@ -63,7 +64,7 @@ SUBTITLE = {
     "tie_out": "Compares tax returns with the ledger and bank.",
     "log": "Warnings and corrections from the last build.",
 }
-EXPORT_NAME = {"mtr": "MTR_detail"}
+EXPORT_NAME = {"mtr": "MTR_Overview"}
 
 
 def open_path(path):
@@ -138,6 +139,8 @@ class App(tk.Tk):
         self.search_hits = []
         self.search_index = -1
         self.search_target = None
+        self.last_conversion_results = []
+        self.conversion_note = ""
         self.last_table = None
         self.setup_styles()
         self.build_header()
@@ -254,7 +257,10 @@ class App(tk.Tk):
         self.source_controls = tk.Frame(main, bg=BG)
         Btn(self.source_controls, "Format summary", lambda: self.open_report("sources")).pack(side="left", padx=3)
         Btn(self.source_controls, "Validate files", lambda: self.open_report("check_tax")).pack(side="left", padx=3)
-        Btn(self.source_controls, "Convert PDF to Excel", self.pick_pdf).pack(side="left", padx=3)
+        Btn(self.source_controls, "Convert selected row", lambda: self.convert_target_pdfs(False), padx=8).pack(side="left", padx=3)
+        Btn(self.source_controls, "Convert all target PDFs", lambda: self.convert_target_pdfs(True), padx=8).pack(side="left", padx=3)
+        Btn(self.source_controls, "Open Excel", self.open_converted_excel, padx=8).pack(side="left", padx=3)
+        Btn(self.source_controls, "Results", lambda: self.open_report("conversion_results"), padx=8).pack(side="left", padx=3)
         self.search_controls = tk.Frame(main, bg=BG)
         tk.Label(self.search_controls, text="Search all tax sheets", bg=BG, fg=TEXT).pack(side="left")
         self.search_query = tk.StringVar()
@@ -304,6 +310,7 @@ class App(tk.Tk):
         xs.pack(side="bottom", fill="x")
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<Configure>", self.resize_preview)
+        self.tree.bind("<Double-1>", self.pdf_row_action)
         self.status_lbl = tk.Label(main, text="", bg=BG, fg=MUTED, anchor="w", font=(FONT, 10))
         self.status_lbl.pack(fill="x")
 
@@ -350,6 +357,8 @@ class App(tk.Tk):
         self.inventory = None
         self.search_hits = []
         self.search_target = None
+        self.conversion_note = ""
+        self.last_conversion_results = []
 
     def refresh(self):
         if self.busy:
@@ -510,6 +519,57 @@ class App(tk.Tk):
         else:
             self.run_bg(self.job_page, name, page)
 
+    def pdf_row_action(self, event):
+        if self.current and self.current.get("key") in ("check_tax", "conversion_results"):
+            row = self.tree.identify_row(event.y)
+            if row:
+                self.tree.selection_set(row)
+                values = self.tree.item(row,"values")
+                if str(values[4]).startswith(("CONVERTED:", "ALREADY CONVERTED:")):
+                    self.open_converted_excel()
+                else:
+                    self.convert_target_pdfs(False)
+
+    def open_converted_excel(self):
+        if self.busy or not self.need_folder():
+            return
+        selection = self.tree.selection()
+        if not selection:
+            self.status("Select a converted PDF row in Results or Validate files first.")
+            return
+        values = self.tree.item(selection[0], "values")
+        sources = view_pdfs(self.folder.get(), values, (self.current or {}).get("key", "sources"))
+        records = conversion_records(self.folder.get())
+        outputs = [converted_output(self.folder.get(),p,records) for p in sources]
+        outputs = [p for p in outputs if p]
+        if outputs:
+            open_path(outputs[0] if len(outputs)==1 else outputs[0].parent)
+        else:
+            self.status("No registered Excel extraction for this row. Use Convert selected row first.")
+
+    def convert_target_pdfs(self, all_targets=False):
+        if self.busy or not self.need_folder():
+            return
+        values = None
+        if not all_targets:
+            selection = self.tree.selection()
+            if not selection:
+                self.status("Select a source folder or PDF row first, or use Convert all target PDFs.")
+                return
+            values = self.tree.item(selection[0], "values")
+        key = (self.current or {}).get("key", "sources")
+        self.run_bg(self.job_batch_convert, values, key)
+
+    def job_batch_convert(self, values, key):
+        folder = self.job_settings[0]
+        sources = view_pdfs(folder,values,key)
+        if not sources:
+            return ("batch_done", [], "No PDFs found in the selected target scope.")
+        results = batch_convert_pdfs(folder,sources,progress=lambda done,total: self.q.put(("batch_progress",done,total)))
+        failures = sum(r[4].startswith("ERROR") for r in results)
+        note = f"{len(results)-failures} of {len(results)} PDFs have Excel extractions; {failures} failed. Review/mapping required. See Results."
+        return ("batch_done", results, note)
+
     def pick_pdf(self):
         if self.busy:
             return
@@ -577,7 +637,7 @@ class App(tk.Tk):
         self.search_label.config(text="")
         if key == "consolidate":
             self.search_controls.pack(fill="x", before=self.picker, pady=3)
-        if key in ("sources", "source_files", "check_tax"):
+        if key in ("sources", "source_files", "check_tax", "conversion_results", "check_fin") or key.startswith("fin_"):
             self.source_controls.pack(fill="x", before=self.picker, pady=3)
         self.page_label.config(text="")
         self.tax_options.pack_forget()
@@ -587,6 +647,11 @@ class App(tk.Tk):
         if key == "tps":
             self.tax_options.pack(fill="x", before=self.picker, pady=4)
         self.btn_export.set_enabled(key in engine.SECTIONS)
+        if key == "conversion_results":
+            self.set_picker([], "")
+            self.draw(["Folder", "Scope", "PDF", "Rows", "Result", "Excel output"], self.last_conversion_results)
+            self.status("Double-click converted rows to open Excel, or failed PDF rows to retry conversion.")
+            return
         if key in ("sources", "source_files"):
             if self.need_folder():
                 self.run_bg(self.job_inventory if key == "sources" else self.job_source_files)
@@ -668,12 +733,12 @@ class App(tk.Tk):
         if self.inventory is None or self.inventory[0] != folder:
             self.inventory = (folder, source_inventory(folder))
         return ("table", ["Source", "Year / scope", "Files", "Status", "Formats"], self.inventory[1],
-                "File inventory only. Use Validate tax files to check headings, values and formula caches.", False)
+                self.conversion_note or "Target-folder inventory. Use Validate files to check contents.", False)
 
     def job_source_files(self):
         root = Path(self.job_settings[0])
         rows = []
-        for path in sorted(root.rglob("*")):
+        for path in target_files(root):
             if (path.is_file() and path.suffix.lower() in engine.FIN_EXT and not any(
                     part.startswith((".", "~$")) for part in path.relative_to(root).parts)):
                 rel = path.relative_to(root)
@@ -686,11 +751,28 @@ class App(tk.Tk):
     def job_check_tax(self):
         rows = validate_sources(self.job_settings[0])
         bad = sum(1 for r in rows if r[4] != "READY")
-        return ("table", ["Tax", "Year", "Source file", "Rows", "Result"], [list(r) for r in rows],
+        displayed = [list(r)+[("Open Excel" if str(r[4]).startswith("CONVERTED:") else "Convert PDF")
+                              if str(r[2]).lower().endswith(".pdf") else ""] for r in rows]
+        return ("table", ["Source", "Scope", "Source file", "Rows", "Result", "Action (double-click)"], displayed,
                 f"{len(rows) - bad} READY tax entries; all other rows require the action shown.", False)
 
     def job_finance(self, key):
-        summary, files = engine.check_finance(self.job_settings[0])
+        folder = self.job_settings[0]
+        summary, files = engine.check_finance(folder)
+        statuses = {r[0]: r[3] for r in source_inventory(folder)}
+        summary = [(*r[:4], statuses.get(r[0],r[4])) for r in summary]
+        records = conversion_records(folder)
+        updated = []
+        for row in files:
+            label, name, sheets, count, note = row
+            if str(name).lower().endswith(".pdf"):
+                finance_key = next(k for k,v in engine.FINANCE_FOLDERS.items() if v[0]==label)
+                directory = engine.finance_folder(folder,finance_key)
+                output = converted_output(folder,directory/name,records)
+                if output:
+                    note = "CONVERTED: Excel available; review required"
+            updated.append((label,name,sheets,count,note))
+        files = updated
         if key in ("check_fin", "tie_out"):
             if key == "tie_out":
                 return ("table", ["Tax vs ledger"], [["Needs sample GL, bank, TB and A/R files before it can be built."]],
@@ -727,10 +809,19 @@ class App(tk.Tk):
         try:
             while True:
                 msg = self.q.get_nowait()
+                kind = msg[0]
+                if kind == "batch_progress":
+                    self.status(f"Converting target PDFs: {msg[1]} / {msg[2]} completed…")
+                    continue
                 self.busy = False
                 self.config(cursor="")
-                kind = msg[0]
-                if kind == "converted":
+                if kind == "batch_done":
+                    self.last_conversion_results = msg[1]
+                    self.conversion_note = msg[2]
+                    self.inventory = None
+                    self.open_report("sources")
+                    self.status(msg[2])
+                elif kind == "converted":
                     result = msg[1]
                     self.inventory = None
                     self.status("Extracted workbook saved for manual review: " + result['output'])

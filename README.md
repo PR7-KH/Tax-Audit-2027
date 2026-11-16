@@ -43,3 +43,10 @@ launch normally. Back up your working folder first.
 For future updates, rebuild the ZIP with `python3 scripts/package_mac_update.py`
 after changing any of the five files, and commit the refreshed ZIP alongside
 the source changes.
+
+Batch conversion: select a source folder/year row and choose **Convert selected
+row**, or use **Convert all target PDFs**. Validation/conversion exclude unrelated
+folders. Outputs are preserved under `.pdf-extractions`, with source-hash history
+in `.tax-audit-conversions.json`; use **Results → Open Excel** to inspect them.
+The overview refreshes automatically and distinguishes conversion completion from
+reviewed/import-ready financial data. See UI_MAC_TEST.md for the full workflow.

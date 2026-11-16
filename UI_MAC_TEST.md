@@ -1,88 +1,71 @@
-# Source workflow, conversion and search update
+# Target-folder batch conversion update
 
-## Mac installation
+## Install
 
-Close the app and back up the working folder. Copy these files from the latest
-GitHub version into that folder **together**:
+Download downloads/Tax-Audit-Mac-Update.zip from GitHub. Close the app, back up
+your working folder, unzip, and copy its five files into the working app folder
+together. Keep your existing templates, company folders and other Python files.
+Run `bash Install_Update_Mac.command` from Terminal in the app folder if the PDF
+dependencies are not installed, then launch normally. Python 3.10+ is required.
 
-- control_center.py
-- engine.py
-- input_tools.py (new)
-- requirements.txt
-- Install_Update_Mac.command (new)
+## Menu order
 
-Keep your original templates, consolidate.py, calc.py, company folders and
-exports. In Terminal, change to this app folder and run:
+Audit Dashboard → TOIs Overview → MTR Overview → Consolidated data → Tax Paid
+Summary. MTR tabs and exports retain their existing calculations.
 
-```sh
-bash Install_Update_Mac.command
-```
+## Target-only scope
 
-This installs the pinned PDF dependency into .venv. Then launch normally with
-Start_Control_Center_Mac.command. Python 3.10+ is required. Source loading and
-report viewing remain local; PDF contents are not sent to a service.
+Inventory, validation and batch conversion use recognized direct input folders:
+PR, SR, TOS, WHT, TOI, Info, and finance folders/aliases recognized by the system
+(GL/General Ledger, TB/Trial Balance, Bank, Sales/Revenue, AR/Receivables,
+Expense/Purchase Ledger). Unrelated company-root files and folders are excluded.
+Files nested inside a recognized target remain in scope; hidden files/folders
+and temporary Excel lock files are ignored.
 
-## Layout
+## Convert without file or destination dialogs
 
-The sidebar is wider. Source overview and Build all data are now beside Select
-folder, rather than in the report sidebar. Source overview offers Format summary,
-Validate files and Convert PDF to Excel. Its summary shows counts such as
-`9 files / 6 Excel, 3 PDF`, without listing file names.
+1. Select the company folder. Source overview loads automatically.
+2. Select a folder/year row and click **Convert selected row**, or use
+   **Convert all target PDFs** to process every recognized target.
+3. Progress appears while conversion runs. One failed/scanned PDF does not stop
+   the other files. Source overview refreshes automatically when it finishes.
+4. Use **Results** to see each converted, already-converted or failed PDF.
+   **Open Excel** opens the selected extraction. Double-clicking a converted
+   row in validation/results opens Excel; double-clicking a pending PDF retries
+   conversion. A selected validation PDF converts only that file.
 
-MTR detail tabs are MTR_PR, MTR_SR, MTR_TOS, MTR_WHT and Summary MTR. TOIs Overview
-contains TOI and FULL TOI. Tax Paid Summary no longer has a Company Info tab;
-Company Info remains available to the dashboard and full workbook where needed.
+Original PDFs are retained. New Excel drafts go in a hidden `.pdf-extractions`
+folder beside the PDF; Open Excel opens them without having to find that hidden
+folder in Finder. Generic drafts stay outside automatic tax import paths, where
+they would fail the required V5.1 layout checks. These drafts preserve text,
+leading zeros and original page text for review.
 
-## Readiness and conversion
+A hidden `.tax-audit-conversions.json` in the company root tracks source hashes
+and output locations. Keep it and .pdf-extractions with the company folder.
+Unchanged PDFs with existing outputs are skipped on rerun. A changed PDF needs
+reconversion and gets a new output name; old workbooks are never overwritten.
 
-File presence is not an import-readiness claim. Inventory flags PDFs, legacy XLS,
-unsupported tax formats and monthly tax files outside year folders. Validate
-files runs the existing monthly tax reader and adds all-folder format/readability
-checks, including GL and Bank. Readable finance files still require column mapping
-and reconciliation rules, which are not implemented by this update.
+## Status after conversion
 
-Convert PDF to Excel prompts for a PDF and a **new** output workbook. It extracts
-text-based tables plus a page-text copy and adds a Conversion Review sheet. It
-keeps values as literal text to preserve leading zeros and avoid inventing date,
-amount or formula interpretations. The original PDF and existing outputs are
-never overwritten. Scanned/image-only, blank or unreadable pages are rejected;
-OCR is not included. Text-only fallback pages require manual table reconstruction.
+The status changes from **Not ready: PDF needs conversion** to **Converted:
+Excel available; review required**. This clears the conversion task rather than
+claiming the bank data has been financially validated. Compare balances and all
+pages, correct amounts/dates, and map columns before use. Automated financial
+reconciliation and OCR are not implemented. Scanned/blank pages remain flagged.
+Tax input must still follow the V5.1 Excel headings. A generic PDF extraction is
+not automatically a valid PR/SR/TOS/WHT return. No financial-readiness status is
+inferred solely from a successful file conversion.
 
-Before importing extracted data, compare every page, opening/closing balances,
-transaction counts and totals with the PDF. Correct dates/amounts, assign numeric
-columns and map to the required input layout. Tax returns must still follow the
-V5.1 Excel headings. A generic extracted bank sheet does not implement automated
-bank reconciliation. Validation marks extracted workbooks for review.
+## Tests
 
-Keep conversion drafts and original PDFs outside tax import directories. After
-review, place only validated/mapped input workbooks there. Original PDFs can be
-archived outside the selected import folders; Refresh then updates inventory.
-Keeping a PDF in an import folder intentionally retains its conversion warning.
+28 automated regression tests pass: target scope, menu order, exact PDF table
+extraction, preserved sources/outputs, unchanged retry behavior, changed-PDF
+reconversion, partial batch failures, automatic path selection, tax draft
+isolation, search, caching, original totals and year/month calculations.
 
-## Search
+A live Tk test on a virtual Linux display passed selected-folder/all-target
+conversion, automatic overview refresh, target-only validation, Open Excel from
+Results and Bank, partial failures and retry behavior without callback errors.
+Native Mac appearance and the contents of your real bank PDFs need your test.
 
-Consolidated data has a search box. Find scans all PR/SR/TOS/WHT tabs and all rows,
-including rows not loaded into the current preview. Results jump to and highlight
-the matching row; Next match cycles through matching rows. This retains fast
-200-row paging rather than loading all rows into the visible table. Search and
-preview navigation do not modify worksheets or exports.
-
-## Validation and manual checks
-
-Automated checks cover format counts, PDF readiness, actual table extraction,
-literal values and leading zeros, original-file preservation, refusal to replace
-outputs, blank/scanned-page rejection, search beyond row 6,000, grouped tabs,
-existing totals/transactions, tax-year/month handling and cached navigation.
-A live Tk test on a virtual Linux display also exercised the conversion dialog
-and worker, source validation, search highlighting across tax sheets, grouped
-tabs and layout restoration without callback errors.
-
-All 23 tests passed. Dependency wheels were resolved and downloaded for Python
-3.10 on both Apple Silicon and Intel Mac targets (this does not establish native
-Mac execution). Run `python -m unittest discover -s tests -v`. On your Mac, check menu sizing,
-real bank PDF extraction, search on your largest company and numeric totals
-against your trusted source. Generic extraction is not certified for every bank
-layout. Native Mac behavior and actual bank statements still need your review.
-
-To roll back, restore the previous control_center.py and engine.py together from
-your backup or Git history. No source workbooks were changed by the update.
+Run `python -m unittest discover -s tests -v` to rerun the automated suite.
