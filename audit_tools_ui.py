@@ -3,6 +3,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import ttk,scrolledtext
 import audit_documents as documents
+from tax_law_ui import TaxLawPanel
 
 TEXT,WHITE,LINE='#172b43','#ffffff','#d7e1eb'
 
@@ -15,6 +16,7 @@ class AuditToolsPanel(tk.Frame):
         tabs=self.tabs=ttk.Notebook(self);tabs.pack(fill='both',expand=True)
         request=ttk.Frame(tabs);meeting=ttk.Frame(tabs)
         tabs.add(request,text='Document Request');tabs.add(meeting,text='Meeting Notes')
+        self.law_panel=TaxLawPanel(tabs);tabs.add(self.law_panel,text='Tax Law Search')
         bar=ttk.Frame(request);bar.pack(fill='x',pady=5)
         ttk.Button(bar,text='Save / Open Excel',command=lambda:self.create_request(False)).pack(side='left',padx=4)
         ttk.Button(bar,text='Save / Preview PDF',command=lambda:self.create_request(True)).pack(side='left',padx=4)
@@ -96,7 +98,7 @@ class AuditToolsPanel(tk.Frame):
             self.meeting_panes.sashpos(0,max(280,int(event.width*.30)))
             self.meeting_sized=True
 
-    def reset(self):
+    def reset(self,reset_law=True):
         self.loaded_folder=None;self.last_meeting=None;self.last_request=None;self.company=[]
         self.tabs.select(0);self.editor_tabs.select(0)
         for widget in self.items_frame.winfo_children():widget.destroy()
@@ -106,11 +108,19 @@ class AuditToolsPanel(tk.Frame):
         self.item_canvas.yview_moveto(0);self.meeting_canvas.yview_moveto(0)
         self.request_status.config(text='Select a company folder with Info/Template.xlsx.')
         self.meeting_status.config(text='Fill the note, then Save Word.')
+        if reset_law:self.law_panel.reset()
 
     def load(self):
         folder=self.app.folder.get()
+        if not folder.strip() or not Path(folder).is_dir():
+            if self.loaded_folder is not None:self.reset(reset_law=False)
+            self.request_status.config(text='Select a company folder with Info/Template.xlsx to create document requests.')
+            self.meeting_status.config(text='Select a company folder to fill and save a meeting note.')
+            self.tabs.select(self.law_panel)
+            self.app.status('Tax Law Search is ready. Select a company folder when you need company documents.')
+            return
         if self.loaded_folder==folder:return
-        self.reset()
+        self.reset(reset_law=False)
         self.app.run_bg(self.load_job,folder)
 
     def load_job(self,folder):
@@ -148,7 +158,7 @@ class AuditToolsPanel(tk.Frame):
         for variable in self.item_vars:variable.set(False)
 
     def create_request(self,pdf):
-        if self.app.busy:return
+        if self.app.busy or not self.app.need_folder():return
         selected=[i for i,v in enumerate(self.item_vars) if v.get()]
         if not selected or len(selected)>17:
             self.request_status.config(text='Select between 1 and 17 items.');return
@@ -162,7 +172,7 @@ class AuditToolsPanel(tk.Frame):
         return ('audit_document_saved','request',str(path))
 
     def save_meeting(self):
-        if self.app.busy:return
+        if self.app.busy or not self.app.need_folder():return
         values={key:text.get('1.0','end-1c') for key,text in self.fields.items()}
         self.app.run_bg(self.meeting_job,self.app.folder.get(),values)
 

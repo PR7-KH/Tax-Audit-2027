@@ -1,8 +1,8 @@
-# Desktop update: Tax Audit Tools, document layout and saves
+# Desktop update: Tax Law Search and Tax Audit Tools
 
 ## Install this update
 
-Back up the working app folder. Unzip the update bundle and copy **all twelve
+Back up the working app folder. Unzip the update bundle and copy **all fifteen
 files, including the assets folder**, into that folder, replacing matching files. Keep templates, company data,
 other Python modules and source workbooks in place.
 
@@ -145,7 +145,7 @@ formulas. MTR summary remains under MTR Overview. Tax Paid Summary uses all
 
 ## Validation performed and what needs your test
 
-65 regression tests have passed, including actual LibreOffice PDF rendering,
+75 regression tests have passed, including actual LibreOffice PDF rendering,
 TOI25 routing, source/output preservation, font/text/formula preservation, Excel
 backend choice, stable Mac work-file identity/locks, source hyperlink opening,
 Windows runtime rejection of unsupported ARM64/3.15, native API cleanup/COM initialization,
@@ -154,12 +154,20 @@ passed TOI25 import, workbook-font display, renderer routing/status and clickabl
 MTR file names. New checks cover Module11 company/item mappings, original-template
 preservation, Word field substitution and versioning, generated-output exclusion,
 TOI-folder output tracking, build notification routing and deferred reset. A live
-Linux Tk check also passed both Tax Audit Tools tabs, document saves, company
+Linux Tk check also passed the Tax Audit Tools document tabs, document saves, company
 auto-fill, build notification invocation and reset of previews/forms/undo history.
 The latest checks verify request replacement (including failed saves/file locks),
 text-length underlines, dated/sequential note naming, date validation and document
 field order. A live Tk check verified visible selectable list text under white
 system text defaults, wrapping/scrolling, repeated saves and the enlarged editor.
+The law checks cover case-insensitive literal phrases, code/text matches,
+Khmer/English filtering, duplicate references, exact import preservation,
+formula rejection, highlight counts, wrapped navigation, clipboard copying,
+Khmer helper insertion, read-only display, missing data and clearing pending searches.
+All 741 codes/texts and 11 helper characters were also compared directly with the
+uploaded source workbook, including its SHA-256. A live app check passed search
+without a company folder or launching Excel/browser, company switching and
+Refresh; the document/meeting workflow check still passed with the third tab.
 
 **Native Microsoft Excel was mocked in these tests:** cloud has no Mac/Windows
 Excel. Real Excel automation, Windows batch launchers, macOS Automation permission
@@ -167,6 +175,8 @@ and Khmer shaping require your native test. Dependency wheels were downloaded fo
 Python 3.10 on Apple Silicon Mac and the complete Python 3.12 Windows x64
 profile, but that is not proof of native execution or Mac permission caching. Run `python -m unittest discover -s tests -v` for the suite; the real
 LibreOffice test skips when LibreOffice is absent.
+The four law UI tests skip if no Tk display is available. The 75-test cloud run
+used a virtual display and LibreOffice, with no skips.
 
 To roll back, restore all application files from your backup or Git history.
 Your company source workbooks and templates are unchanged by this update.
@@ -227,6 +237,52 @@ case's facts. The template references **Khmer MEF1 / Khmer MEF2** fonts; install
 the matching fonts for the original appearance. Check the resulting pagination,
 Khmer shaping and signature positions in Microsoft Word before printing. Cloud
 checks confirm editable text and structural preservation, not native Word layout.
+
+## Tax Audit Tools: Tax Law Search
+
+Open **Tax Audit Tools → Tax Law Search**, directly beside Meeting Notes.
+A company folder is optional for law search; document requests and Word saves
+still require one. When no company is selected, Tax Audit Tools opens this tab.
+
+Type a reference or phrase in Khmer or English. Results update after a short
+typing pause, or press Enter/Search. As in the VBA form, search matches a
+**literal, case-insensitive phrase** anywhere in the reference or article text;
+results stay in workbook order. Words are not automatically translated or
+treated as separate search terms. **Browse all** displays the full library.
+The regulation and language filters refine results; the English filter uses
+the workbook's `-EN` references.
+
+Select a result to read its full text. Matches are green and the current match
+is yellow. **Previous / Next** (or Shift-F3 / F3) wrap through occurrences in
+that article. A reference-only match is labelled separately when the phrase
+does not appear in the body. The article is read-only, with original newlines;
+**+ / -** change reading size. Drag the divider to resize the results/reader.
+
+**Khmer characters** provides the original 11 helper characters and inserts the
+chosen character at the search caret. **Copy reference / Copy article** puts
+the selected material on the clipboard for pasting into Meeting Notes or another
+document. Ordinary Ctrl/Cmd-F focuses the search box while working in this tab.
+**Clear** resets this search. Navigation away/back and changing companies retain
+the law search; the global **Refresh** clears it with the rest of the session.
+
+The bundled `assets/tax_laws.json` contains **741 entries** (378 Khmer-reference
+entries and 363 `-EN` entries) from **Advance Regulation Compiled - V9.5 Pro-Alt
+Fixed .xlsm**. Codes, text, source rows and the character helper are preserved.
+The app uses the local JSON library at runtime. Neither Excel/VBA nor the
+original Windows browser control is required for searching or reading.
+
+**Library info** identifies the source compilation. One source cell, row 378
+(`574 MEF(01-Jan-25)(TP) 1-13`), contains 32,767 characters, Excel's cell limit.
+The library retains every character stored there; it cannot recover material
+not present in the supplied workbook. Law wording/currency follows that uploaded
+compilation and is not refreshed from the internet.
+
+For a newer compilation, the development helper
+`python3 scripts/import_tax_laws.py "<workbook>.xlsm"` rebuilds the JSON from
+Regulations A/B and the optional Khmer sheet, without executing VBA. It validates
+rows and rejects formula/incomplete entries instead of silently omitting them.
+Review and test the replacement library, restart the app and rebuild the update
+ZIP before distributing it. The original workbook is never changed by import.
 
 ## Build notification and Refresh
 

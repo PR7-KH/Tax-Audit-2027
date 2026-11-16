@@ -22,6 +22,11 @@ The desktop Control Center is implemented in control_center.py.
 Tax Audit Tools → Document Request reproduces the VBA Module11 checklist using
 Info/Template.xlsx. Tax Audit Tools → Meeting Notes saves editable Word documents
 with the selected company's Info details.
+**Tax Audit Tools → Tax Law Search**, beside Meeting Notes, searches all **741**
+entries imported from the supplied V9.5 regulation workbook. Search Khmer or
+English article text/references, read full articles, jump between highlighted
+matches, filter regulations/languages and copy a reference or article into your
+notes. This local search works without Excel or a company folder selected.
 
 Interface updates and Mac upgrade checks: see [UI_MAC_TEST.md](UI_MAC_TEST.md).
 Tax Paid Summary uses all 12 months of the older Info year and `--months` of the
@@ -56,8 +61,9 @@ in `.tax-audit-conversions.json`; use **Results → Open Excel** to inspect them
 The overview refreshes automatically and distinguishes conversion completion from
 reviewed/import-ready financial data. See UI_MAC_TEST.md for the full workflow.
 
-The update bundle includes twelve files, including both Tax Audit Tools modules and
-`assets/meeting_note_template.docx`. Copy the **assets folder** too, and rerun
+The update bundle includes fifteen files, including the Tax Audit Tools/search
+modules, `assets/meeting_note_template.docx` and `assets/tax_laws.json`.
+Copy the **assets folder** too, and rerun
 the Mac installer to install python-docx. Selecting a new
 company folder with no recognized target folders automatically organizes explicit
 filenames from its Download child. See UI_MAC_TEST.md for routing rules and the
@@ -100,3 +106,13 @@ Their body order is company info, meeting date/time/place, legal references and
 the written note; the official heading/title is retained. A large writing pane
 sits beside the meeting details, with a separate Requests & follow-up tab.
 See [UI_MAC_TEST.md](UI_MAC_TEST.md) for template setup and native testing steps.
+
+The law library preserves the uploaded compilation's references/text and source
+order. **Library info** shows the source and its single entry at Excel's text
+limit; the stored text is included in full. It is a snapshot of that workbook.
+To rebuild the bundled library from a newer compilation without running VBA:
+
+    python3 scripts/import_tax_laws.py "<updated law workbook>.xlsm"
+
+Review the new data, restart the app, run the tests and rebuild the update ZIP.
+Tax search adds no new Python dependencies.

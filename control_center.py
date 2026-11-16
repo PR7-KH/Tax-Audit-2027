@@ -843,7 +843,6 @@ class App(tk.Tk):
             self.tax_options.pack(fill="x", before=self.picker, pady=4)
         self.btn_export.set_enabled(key in engine.SECTIONS)
         if key == "audit_tools":
-            if not self.need_folder():return
             self.set_picker([],"");self.preview_card.pack_forget()
             if self.audit_panel is None:self.audit_panel=AuditToolsPanel(self.main_panel,self)
             self.audit_panel.pack(fill="both",expand=True,before=self.status_lbl,pady=4)
