@@ -2,6 +2,7 @@
 
 Click a report to VIEW it. Nothing is written to disk until you press an Export button.
 """
+from collections import OrderedDict, Counter
 import queue
 import re
 import subprocess
@@ -25,17 +26,14 @@ NUMBER = re.compile(r"^-?[\d,]+(\.\d+)?%?$")
 # (kind, key, label)   kind: group | item | sub
 MENU = [
     ("group", "", "TAX AUDIT"),
-    ("item", "check_tax", "Check source files"),
+    ("item", "sources", "Source overview"),
+    ("item", "check_tax", "Validate tax files"),
     ("item", "build_all", "Build all data"),
     ("item", "consolidate", "Consolidated data"),
     ("item", "summary", "Summary MTR"),
     ("item", "toi", "TOI compare"),
     ("item", "fulltoi", "FULL TOI"),
     ("item", "mtr", "MTR detail  (all four)"),
-    ("sub", "mtr_pr", "PR"),
-    ("sub", "mtr_sr", "SR"),
-    ("sub", "mtr_tos", "TOS"),
-    ("sub", "mtr_wht", "WHT"),
     ("item", "tps", "Tax Paid Summary"),
     ("item", "dashboard", "Audit Dashboard"),
     ("group", "", "FINANCIAL AUDIT"),
@@ -51,6 +49,7 @@ MENU = [
     ("item", "log", "Processing log"),
 ]
 SUBTITLE = {
+    "sources": "Company file counts by tax year and financial folder. No workbook contents are opened.",
     "check_tax": "Reads every monthly tax file with the same reader as V5.1 and reports problems before any build.",
     "build_all": "Builds every tax report in memory. Nothing is saved until you export.",
     "consolidate": "Consolidated monthly data with file subtotals and year totals (PR, SR, TOS, WHT).",
@@ -94,6 +93,30 @@ def report_row_tag(values, index, numbered=False):
     return "odd" if index % 2 else "even"
 
 
+def source_inventory(folder):
+    """Fast counts only: do not open thousands of workbooks on folder selection."""
+    root = Path(folder)
+    rows = []
+    for tax in engine.cons.LAYOUTS:
+        directory = engine.find_dir(root, tax)
+        counts = Counter(year for year, path in engine.cons.files_in(directory)) if directory else Counter()
+        for year, count in sorted(counts.items()):
+            rows.append([tax, year, count, "Found"])
+        if not counts:
+            rows.append([tax, "—", 0, "Missing" if directory is None else "Empty"])
+    for name in ("TOI", "Info"):
+        directory = engine.find_dir(root, name)
+        count = len([p for p in directory.glob("*.xlsx") if not p.name.startswith((".", "~$"))]) if directory else 0
+        rows.append([name, "All", count, "Found" if count else "Missing"])
+    for key, (label, _) in engine.FINANCE_FOLDERS.items():
+        directory = engine.finance_folder(root, key)
+        count = sum(1 for p in directory.rglob("*") if p.is_file() and
+                    p.suffix.lower() in engine.FIN_EXT and not any(
+                        part.startswith((".", "~$")) for part in p.relative_to(directory).parts)) if directory else 0
+        rows.append([label, "All", count, "Found" if count else "No files"])
+    return rows
+
+
 class Btn(tk.Label):
     """Flat button built from a Label so colours survive macOS dark mode."""
 
@@ -128,25 +151,36 @@ class App(tk.Tk):
         self.last_export = None
         self.menu_labels = {}
         self.busy = False
+        self.page_cache = OrderedDict()
+        self.sheet_pages = {}
+        self.sheet_dimensions = {}
+        self.page_size = 200
+        self.zoom = 90
+        self.fit_columns = True
+        self.inventory = None
         self.setup_styles()
         self.build_header()
         self.build_body()
         self.status("Select the company folder to begin.")
         self.after(120, self.poll)
-        self.after_idle(lambda: self.attributes("-fullscreen", True))
-        self.bind("<Escape>", lambda event: self.attributes("-fullscreen", False))
-        self.bind("<F11>", self.toggle_fullscreen)
+        self.after_idle(self.maximize_window)
 
-    def toggle_fullscreen(self, event=None):
-        self.attributes("-fullscreen", not self.attributes("-fullscreen"))
-        return "break"
+    def maximize_window(self):
+        # macOS zoom keeps the title bar, Dock and menu bar available.
+        try:
+            self.state("zoomed")
+        except tk.TclError:
+            try:
+                self.attributes("-zoomed", True)
+            except tk.TclError:
+                self.geometry(f"{self.winfo_screenwidth()}x{max(640, self.winfo_screenheight()-80)}+0+25")
 
     # ------------------------------------------------------------ layout
     def setup_styles(self):
         st = ttk.Style(self)
         st.theme_use("clam")
         st.configure("Treeview", background=CARD, fieldbackground=CARD, foreground=TEXT,
-                     rowheight=32, borderwidth=1, relief="solid", font=(FONT, 11, "bold"))
+                     rowheight=27, borderwidth=1, relief="solid", font=(FONT, 10, "bold"))
         st.configure("Treeview.Heading", background="#e4edf5", foreground=NAVY,
                      font=(FONT, 11, "bold"), relief="raised", padding=(10, 10))
         st.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", "white")])
@@ -161,8 +195,6 @@ class App(tk.Tk):
         tk.Label(head, text="PRIVATE WORKSPACE  •  LOCAL FILES", bg=NAVY, fg="#9db4d3",
                  font=(FONT, 11)).pack(side="left", pady=(18, 0))
 
-        Btn(head, "Exit full screen", lambda: self.attributes("-fullscreen", False),
-            color=SIDE, hover=SIDE_HOVER).pack(side="right", padx=18)
         bar = tk.Frame(self, bg=CARD, highlightthickness=1, highlightbackground=LINE)
         bar.pack(fill="x")
         row = tk.Frame(bar, bg=CARD)
@@ -181,24 +213,19 @@ class App(tk.Tk):
         tk.Checkbutton(opt, text="Fill ADT rows V5.1 leaves blank", variable=self.link_all, bg=CARD, fg=TEXT,
                        activebackground=CARD, activeforeground=TEXT, selectcolor=CARD, font=(FONT, 10),
                        command=self.invalidate).pack(side="right")
-        tk.Spinbox(opt, from_=1, to=12, width=3, textvariable=self.months, bg="#f7f9fc", fg=TEXT,
-                   buttonbackground="#f7f9fc", insertbackground=TEXT, font=(FONT, 10),
-                   command=self.invalidate).pack(side="right", padx=(6, 18))
-        tk.Label(opt, text="Months of earlier year (Tax Paid Summary)", bg=CARD, fg=TEXT,
-                 font=(FONT, 10)).pack(side="right")
 
     def build_body(self):
         body = tk.Frame(self, bg=BG)
         body.pack(fill="both", expand=True)
-        side = tk.Frame(body, bg=SIDE, width=250)
+        side = tk.Frame(body, bg=SIDE, width=205)
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
-        canvas = tk.Canvas(side, bg=SIDE, highlightthickness=0, width=250)
+        canvas = tk.Canvas(side, bg=SIDE, highlightthickness=0, width=205)
         inner = tk.Frame(canvas, bg=SIDE)
-        canvas.create_window((0, 0), window=inner, anchor="nw", width=250)
+        canvas.create_window((0, 0), window=inner, anchor="nw", width=205)
         canvas.pack(fill="both", expand=True)
         inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+        canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"))
         for kind, key, label in MENU:
             if kind == "group":
                 tk.Label(inner, text=label, bg=SIDE, fg="#7f9cc4", font=(FONT, 10, "bold"),
@@ -215,18 +242,18 @@ class App(tk.Tk):
         self.active_key = None
 
         main = tk.Frame(body, bg=BG)
-        main.pack(side="left", fill="both", expand=True, padx=18, pady=14)
+        main.pack(side="left", fill="both", expand=True, padx=12, pady=8)
         top = tk.Frame(main, bg=BG)
         top.pack(fill="x")
         titles = tk.Frame(top, bg=BG)
         titles.pack(side="left", fill="x", expand=True)
-        self.title_lbl = tk.Label(titles, text="Your audit workspace", bg=BG, fg=NAVY, font=(FONT, 20, "bold"), anchor="w")
+        self.title_lbl = tk.Label(titles, text="Your audit workspace", bg=BG, fg=NAVY, font=(FONT, 17, "bold"), anchor="w")
         self.title_lbl.pack(fill="x")
         self.sub_lbl = tk.Label(titles, text="Choose a report on the left. Reports open for viewing; export when you want a file.",
                                 bg=BG, fg=MUTED, font=(FONT, 11), anchor="w", justify="left", wraplength=700)
         self.sub_lbl.pack(fill="x")
         tools = tk.Frame(main, bg=BG)
-        tools.pack(fill="x", pady=(14, 4))
+        tools.pack(fill="x", pady=(6, 4))
         self.btn_export = Btn(tools, "Export this report", self.export_this, color=GREEN, hover="#14664a")
         self.btn_export.pack(side="left", padx=4)
         Btn(tools, "Export everything", self.export_all).pack(side="left", padx=4)
@@ -234,32 +261,29 @@ class App(tk.Tk):
 
         self.sub_lbl.bind("<Configure>", lambda event: self.sub_lbl.configure(
             wraplength=max(240, event.width - 12)))
-        overview = tk.Frame(main, bg=BG)
-        overview.pack(fill="x", pady=(12, 8))
-        self.metric_values = {}
-        for index, (key, title, value) in enumerate((
-                ("company", "COMPANY WORKSPACE", "Select a company folder"),
-                ("report", "ACTIVE VIEW", "Overview"),
-                ("rows", "VISIBLE ROWS", "0"))):
-            overview.columnconfigure(index, weight=1, uniform="metrics")
-            tile = tk.Frame(overview, bg=CARD, highlightthickness=1, highlightbackground=LINE)
-            tile.grid(row=0, column=index, sticky="nsew", padx=(0 if index == 0 else 6, 0))
-            tk.Label(tile, text=title, bg=CARD, fg=MUTED,
-                     font=(FONT, 9, "bold"), anchor="w").pack(fill="x", padx=16, pady=(12, 4))
-            label = tk.Label(tile, text=value, bg=CARD, fg=NAVY,
-                             font=(FONT, 14, "bold"), anchor="w")
-            label.pack(fill="x", padx=16, pady=(0, 14))
-            label.bind("<Configure>", lambda event, label=label: label.configure(
-                wraplength=max(80, event.width - 8)))
-            self.metric_values[key] = label
+        self.company_label = tk.Label(main, text="Select a company folder", bg=BG, fg=MUTED,
+                                      font=(FONT, 10), anchor="w")
+        self.company_label.pack(fill="x", pady=4)
+        self.tax_options = tk.Frame(main, bg=BG)
+        tk.Label(self.tax_options, text="Months of earlier year", bg=BG, fg=TEXT).pack(side="left")
+        tk.Spinbox(self.tax_options, from_=1, to=12, width=4, textvariable=self.months).pack(side="left", padx=8)
+        Btn(self.tax_options, "Apply", self.apply_months).pack(side="left")
 
         self.picker = tk.Frame(main, bg=BG)
         self.picker.pack(fill="x", pady=(10, 0))
         card = tk.Frame(main, bg=CARD, highlightthickness=1, highlightbackground=LINE)
         card.pack(fill="both", expand=True, pady=(8, 8))
-        tk.Label(card, text="REPORT DETAIL     •     Preview only — export to save a workbook",
-                 bg="#e4edf5", fg=NAVY, anchor="w", padx=14, pady=10,
-                 font=(FONT, 10, "bold")).pack(fill="x")
+        preview_tools = tk.Frame(card, bg="#e4edf5")
+        preview_tools.pack(fill="x")
+        Btn(preview_tools, "−", lambda: self.change_zoom(-10)).pack(side="left", padx=2)
+        self.zoom_label = tk.Label(preview_tools, text="90%", bg="#e4edf5", fg=NAVY)
+        self.zoom_label.pack(side="left")
+        Btn(preview_tools, "+", lambda: self.change_zoom(10)).pack(side="left", padx=2)
+        Btn(preview_tools, "Fit columns", self.toggle_fit).pack(side="left", padx=4)
+        Btn(preview_tools, "Previous", lambda: self.change_page(-1)).pack(side="right", padx=2)
+        Btn(preview_tools, "Next", lambda: self.change_page(1)).pack(side="right", padx=2)
+        self.page_label = tk.Label(preview_tools, text="", bg="#e4edf5", fg=NAVY)
+        self.page_label.pack(side="right", padx=8)
         self.tree = ttk.Treeview(card, show="headings", selectmode="browse")
         for tag, options in {
             "even": {"background": "#ffffff"},
@@ -301,54 +325,115 @@ class App(tk.Tk):
 
     def pick_folder(self):
         d = filedialog.askdirectory(title="Select the company folder")
-        if d:
+        if d and not self.busy:
             self.folder.set(d)
             self.invalidate()
-            self.status(f"Folder selected: {Path(d).name}")
+            self.open_report("sources")
 
     def need_folder(self):
-        if not Path(self.folder.get()).is_dir():
+        if not self.folder.get().strip() or not Path(self.folder.get()).is_dir():
             messagebox.showwarning("Select folder", "Click Select folder and choose the company folder first.")
             return False
         return True
 
     def invalidate(self):
+        if self.busy:
+            return
         self.built = None
+        self.page_cache.clear()
+        self.sheet_pages.clear()
+        self.sheet_dimensions.clear()
+        self.inventory = None
 
     def refresh(self):
+        if self.busy:
+            return
         self.invalidate()
         if self.current and self.current.get("key"):
             self.open_report(self.current["key"])
 
     # ------------------------------------------------------------ table drawing
-    def draw(self, columns, rows, align_right=True, sheet=None):
+    def draw(self, columns, rows, align_right=True, tags=None):
         self.tree.delete(*self.tree.get_children())
         ids = [f"c{i}" for i in range(len(columns))]
         self.tree["columns"] = ids
-        sample = rows[:300]
+        scale = self.zoom / 100
+        available = max(300, self.tree.winfo_width() - 24)
         for i, (cid, name) in enumerate(zip(ids, columns)):
-            cells = [str(r[i]) for r in sample if i < len(r) and str(r[i]) != ""]
+            cells = [str(r[i]) for r in rows[:100] if i < len(r) and r[i] not in (None, "")]
             numeric = align_right and cells and sum(bool(NUMBER.match(c)) for c in cells) / len(cells) > 0.6
-            longest = max([len(name)] + [len(c) for c in cells]) if cells else len(name)
+            natural = max(55, min(max([len(name)] + [len(c) for c in cells]) * 7 + 20, 400))
+            width = max(45, available // max(1, len(ids))) if self.fit_columns else natural
             self.tree.heading(cid, text=name)
-            self.tree.column(cid, width=max(48, min(longest * 8 + 22, 420)), minwidth=40,
+            self.tree.column(cid, width=int(width * scale), minwidth=30,
                              anchor="e" if numeric else "w", stretch=False)
         for index, r in enumerate(rows):
-            values = [("" if v is None else v) for v in r]
-            tag = report_row_tag(values, index, sheet is not None)
-            if sheet is not None and tag in ("even", "odd"):
-                cells = list(sheet.iter_rows(min_row=index + 1, max_row=index + 1))[0]
-                if any(c.value is not None and c.font.bold for c in cells):
-                    tag = "section"
+            values = ["" if v is None else v for v in r]
+            tag = tags[index] if tags else report_row_tag(values, index)
             self.tree.insert("", "end", values=values, tags=(tag,))
-        self.metric_values["company"].config(text=Path(self.folder.get()).name if self.folder.get() else "Select a company folder")
-        self.metric_values["report"].config(text=self.title_lbl.cget("text"))
-        self.metric_values["rows"].config(text=f"{len(rows):,}")
+        self.company_label.config(text=Path(self.folder.get()).name if self.folder.get() else "Select a company folder")
 
-    def draw_sheet(self, rows, ncols):
-        letters = [calc_letter(i + 1) for i in range(ncols)]
-        sheet = self.built[1][self.current["sheet"]] if self.built else None
-        self.draw(["#"] + letters, [[n + 1] + r for n, r in enumerate(rows)], sheet=sheet)
+    def apply_months(self):
+        if self.busy:
+            return
+        try:
+            months = self.months.get()
+            if not 1 <= months <= 12:
+                raise ValueError()
+        except (ValueError, tk.TclError):
+            messagebox.showwarning("Months", "Enter a number from 1 to 12.")
+            return
+        self.invalidate()
+        self.open_report("tps")
+
+    def change_zoom(self, delta):
+        self.zoom = max(50, min(150, self.zoom + delta))
+        self.zoom_label.config(text=f"{self.zoom}%")
+        style = ttk.Style(self)
+        style.configure("Treeview", font=(FONT, max(7, round(11*self.zoom/100)), "bold"),
+                        rowheight=max(18, round(30*self.zoom/100)))
+        style.configure("Treeview.Heading", font=(FONT, max(7, round(11*self.zoom/100)), "bold"))
+        if self.current and self.current.get("sheet") and not self.busy:
+            self.show_sheet(self.current["sheet"])
+
+    def toggle_fit(self):
+        self.fit_columns = not self.fit_columns
+        self.change_zoom(0)
+
+    def change_page(self, direction):
+        if self.busy or not self.current or not self.current.get("sheet"):
+            return
+        name = self.current["sheet"]
+        total = self.sheet_dimensions[name][1]
+        self.sheet_pages[name] = max(0, min((total-1)//self.page_size,
+                                           self.sheet_pages.get(name, 0) + direction))
+        self.show_sheet(name)
+
+    def job_page(self, name, page):
+        wb, cal = self.built[1], self.built[3]
+        ws = wb[name]
+        # Compute dimensions once; OpenPyXL max_column scans all stored cells.
+        if name not in self.sheet_dimensions:
+            self.sheet_dimensions[name] = (ws.max_column, ws.max_row)
+        ncols, total = self.sheet_dimensions[name]
+        start = page * self.page_size + 1
+        rows, tags = [], []
+        for r in range(start, min(total + 1, start + self.page_size)):
+            cells = [ws.cell(r, c) for c in range(1, ncols + 1)]
+            values = [calc.display(cal.value(name, r, c), cell.number_format)
+                      for c, cell in enumerate(cells, 1)]
+            tag = report_row_tag(values, r-1)
+            if tag in ("even", "odd") and any(cell.value is not None and cell.font.bold for cell in cells):
+                tag = "section"
+            rows.append([r] + values)
+            tags.append(tag)
+        return ("page", name, page, ncols, total, rows, tags)
+
+    def present_page(self, msg):
+        _, name, page, ncols, total, rows, tags = msg
+        self.draw(["#"] + [calc_letter(i+1) for i in range(ncols)], rows, tags=tags)
+        self.page_label.config(text=f"Page {page+1} / {max(1, (total+self.page_size-1)//self.page_size)}")
+        self.status(f"{name}: rows {page*self.page_size+1:,}–{min(total,(page+1)*self.page_size):,} of {total:,}. All rows available using Next / Previous.")
 
     def set_picker(self, names, active):
         for w in self.picker.winfo_children():
@@ -361,12 +446,17 @@ class App(tk.Tk):
             b.pack(side="left", padx=(0, 6))
 
     def show_sheet(self, name):
-        tables = self.current["tables"]
-        rows, ncols = tables[name]
+        if self.busy:
+            return
         self.current["sheet"] = name
-        self.draw_sheet(rows, ncols)
-        self.set_picker(list(tables), name)
-        self.status(f"{name}: {len(rows)} rows. Press Export to save as Excel.")
+        self.set_picker(list(self.current["tables"]), name)
+        page = self.sheet_pages.get(name, 0)
+        cache_key = (name, page)
+        if cache_key in self.page_cache:
+            self.page_cache.move_to_end(cache_key)
+            self.present_page(self.page_cache[cache_key])
+        else:
+            self.run_bg(self.job_page, name, page)
 
     # ------------------------------------------------------------ opening a report
     def open_report(self, key):
@@ -378,7 +468,15 @@ class App(tk.Tk):
         self.title_lbl.config(text=label.strip())
         self.sub_lbl.config(text=SUBTITLE.get(key, ""))
         self.current = {"key": key}
+        self.page_label.config(text="")
+        self.tax_options.pack_forget()
+        if key == "tps":
+            self.tax_options.pack(fill="x", before=self.picker, pady=4)
         self.btn_export.set_enabled(key in engine.SECTIONS)
+        if key == "sources":
+            if self.need_folder():
+                self.run_bg(self.job_inventory)
+            return
         if key in ("check_fin", "tie_out") or key.startswith("fin_"):
             if not self.need_folder():
                 return
@@ -394,6 +492,14 @@ class App(tk.Tk):
         self.run_bg(self.job_report, key)
 
     def run_bg(self, fn, *args):
+        if self.busy:
+            return
+        # Read Tk variables only on the main thread, never in worker jobs.
+        try:
+            self.job_settings = (self.folder.get(), self.months.get(), self.link_all.get())
+        except tk.TclError:
+            messagebox.showwarning("Options", "Enter a valid month count.")
+            return
         self.busy = True
         self.status("Working…")
         self.config(cursor="watch")
@@ -407,20 +513,30 @@ class App(tk.Tk):
 
     # ------------------------------------------------------------ background jobs (no Tk calls here)
     def ensure_built(self):
-        key = (self.folder.get(), self.months.get(), self.link_all.get())
+        key = self.job_settings
         if self.built is None or self.built[0] != key:
             wb, log = engine.build_workbook(key[0], key[1], key[2])
+            self.page_cache.clear()
+            self.sheet_pages.clear()
+            self.sheet_dimensions.clear()
             self.built = (key, wb, log, calc.Calc(wb))
         return self.built
 
+    def job_inventory(self):
+        folder = self.job_settings[0]
+        if self.inventory is None or self.inventory[0] != folder:
+            self.inventory = (folder, source_inventory(folder))
+        return ("table", ["Source", "Year / scope", "Files", "Status"], self.inventory[1],
+                "File inventory only. Use Validate tax files to check headings, values and formula caches.", False)
+
     def job_check_tax(self):
-        rows = engine.check_sources(self.folder.get())
+        rows = engine.check_sources(self.job_settings[0])
         bad = sum(1 for r in rows if r[4] != "READY")
         return ("table", ["Tax", "Year", "Source file", "Rows", "Result"], [list(r) for r in rows],
                 f"{len(rows) - bad} of {len(rows)} items ready.", False)
 
     def job_finance(self, key):
-        summary, files = engine.check_finance(self.folder.get())
+        summary, files = engine.check_finance(self.job_settings[0])
         if key in ("check_fin", "tie_out"):
             if key == "tie_out":
                 return ("table", ["Tax vs ledger"], [["Needs sample GL, bank, TB and A/R files before it can be built."]],
@@ -447,7 +563,7 @@ class App(tk.Tk):
                     f"Built {len(rows)} sheets in memory. Open each report on the left, or press Export everything.",
                     True)
         names = [n for n in wb.sheetnames if n in engine.SECTIONS[key][1]]
-        tables = {n: calc.sheet_table(wb, n, cal) for n in names}
+        tables = dict.fromkeys(names)
         return ("sheets", key, tables)
 
     # ------------------------------------------------------------ queue results -> screen
@@ -458,7 +574,12 @@ class App(tk.Tk):
                 self.busy = False
                 self.config(cursor="")
                 kind = msg[0]
-                if kind == "table":
+                if kind == "page":
+                    self.page_cache[(msg[1], msg[2])] = msg
+                    while len(self.page_cache) > 32:
+                        self.page_cache.popitem(last=False)
+                    self.present_page(msg)
+                elif kind == "table":
                     _k, cols, rows, note, _exp = msg
                     self.set_picker([], "")
                     self.draw(cols, rows)
@@ -484,6 +605,9 @@ class App(tk.Tk):
 
     # ------------------------------------------------------------ export
     def export(self, sections, default_name):
+        if self.busy:
+            self.status("Please wait for the current operation to finish.")
+            return
         if not self.need_folder():
             return
         path = filedialog.asksaveasfilename(
