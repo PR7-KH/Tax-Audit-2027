@@ -1,4 +1,4 @@
-# Desktop update: Audit Tools, session reset and PDF export
+# Desktop update: Tax Audit Tools, document layout and saves
 
 ## Install this update
 
@@ -18,7 +18,7 @@ Mac uses Python 3.10+ and .venv. Windows uses Python 3.12 x64 and a separate
 installs the Python Excel bridge (xlwings) and its platform dependencies. No Excel
 PDF add-in, xlwings add-in or PRO subscription is required for this feature.
 Desktop Microsoft Excel must already be installed and activated for Excel export.
-The new Audit Tools modules require **python-docx**; rerun the Mac installer even
+The Tax Audit Tools modules require **python-docx**; rerun the Mac installer even
 if the previous version already worked. The Windows launcher checks for this
 dependency and runs setup if it is missing.
 
@@ -145,7 +145,7 @@ formulas. MTR summary remains under MTR Overview. Tax Paid Summary uses all
 
 ## Validation performed and what needs your test
 
-63 regression tests have passed, including actual LibreOffice PDF rendering,
+65 regression tests have passed, including actual LibreOffice PDF rendering,
 TOI25 routing, source/output preservation, font/text/formula preservation, Excel
 backend choice, stable Mac work-file identity/locks, source hyperlink opening,
 Windows runtime rejection of unsupported ARM64/3.15, native API cleanup/COM initialization,
@@ -154,8 +154,12 @@ passed TOI25 import, workbook-font display, renderer routing/status and clickabl
 MTR file names. New checks cover Module11 company/item mappings, original-template
 preservation, Word field substitution and versioning, generated-output exclusion,
 TOI-folder output tracking, build notification routing and deferred reset. A live
-Linux Tk check also passed both Audit Tools tabs, document saves, company
+Linux Tk check also passed both Tax Audit Tools tabs, document saves, company
 auto-fill, build notification invocation and reset of previews/forms/undo history.
+The latest checks verify request replacement (including failed saves/file locks),
+text-length underlines, dated/sequential note naming, date validation and document
+field order. A live Tk check verified visible selectable list text under white
+system text defaults, wrapping/scrolling, repeated saves and the enlarged editor.
 
 **Native Microsoft Excel was mocked in these tests:** cloud has no Mac/Windows
 Excel. Real Excel automation, Windows batch launchers, macOS Automation permission
@@ -165,37 +169,60 @@ profile, but that is not proof of native execution or Mac permission caching. Ru
 LibreOffice test skips when LibreOffice is absent.
 
 To roll back, restore all application files from your backup or Git history.
-Your company workbooks and templates are unchanged by this update.
+Your company source workbooks and templates are unchanged by this update.
+Saving a document request intentionally replaces its previous app-generated file.
 
-## Audit Tools: Document Request
+## Tax Audit Tools: Document Request
 
-Open **Audit Tools** below Tax Paid Summary, then **Document Request**.
+Open **Tax Audit Tools** below Tax Paid Summary, then **Document Request**.
 Put the original **Template.xlsx** in the selected company's **Info** folder.
 As in VBA Module11, Sheet1 provides the report layout and Sheet2 provides choices
 starting at A7 and ending at the first blank cell (up to row 1000). Keep the
 company Info workbook as a separate Excel file in Info with Sheet1.
 
-Select up to **17** items. **Create / Open Excel** fills company details in
+The list uses explicit dark labels on alternating light rows, so the item names
+remain visible with Mac dark-mode text defaults. Click a name or its checkbox;
+long names wrap as the window changes size, and the list scrolls with the mouse.
+
+Select up to **17** items. **Save / Open Excel** fills company details in
 A6:B10 using Info rows 1, 2, 5, 6, 3, and puts the selected requests in A14:A30.
 It hides unused rows 16–30 and preserves the template's page setup.
-**Preview / Print PDF** renders a PDF using the renderer selected in TOIs Overview
+Accounting underlines are converted to ordinary text underlines, with trailing
+padding/underscore decorations removed from underlined headings. Template borders
+and blank fill-in lines are preserved, and the source template is unchanged.
+**Save / Preview PDF** renders a PDF using the renderer selected in TOIs Overview
 (Microsoft Excel on Mac/Windows by default), then opens it for review/printing.
 Use the viewer's Print command. Source templates are never overwritten.
-Excel and PDF results are saved under **company/Audit_Tools** with numbered
-versions. The Excel report remains available if PDF rendering fails.
+Excel and PDF results are saved under **company/Audit_Tools** as
+**Doc_Requirement.xlsx** and **Doc_Requirement.pdf**. Repeated saves replace the
+same file of that format, without creating numbered copies. Close the file in
+Excel/the PDF viewer before saving again if Windows reports it is locked.
+Replacement occurs only after the new file is complete; a failed save leaves
+the previous file intact. Saving Excel updates the workbook; use Save / Preview
+PDF to regenerate the PDF for the current selection. Existing numbered outputs
+from older app versions are left on disk.
 
-## Audit Tools: Meeting Notes
+## Tax Audit Tools: Meeting Notes
 
 The **Meeting Notes** tab starts with the selected company's Info details and
-today's Cambodia date. Edit those details and enter attendees, reference, agenda,
-discussion, requested documents, decisions and closing text. **Save Word** creates
-**company/Audit_Tools/Meeting_Note.docx**; later saves create numbered versions.
+today's Cambodia date in **YYYY-MM-DD** format. The details sit on the left;
+the **Writing note** tab on the right provides a large editor. Drag the divider
+to change the space allocated to each side. **Requests & follow-up** contains
+requested documents, decisions and closing text. Edit details and write the note,
+then **Save Word**. Files are kept under **company/Audit_Tools**, for example
+**Meeting_Note_2026-11-16_Note_1.docx** then
+**Meeting_Note_2026-11-16_Note_2.docx**. The date comes from the meeting-date
+field; numbering starts at 1 for each date and does not replace previous notes.
 **Open Word / Print** opens the latest saved document in your default Word app.
 It opens the saved version, so save again after further edits.
 
 The bundled template is derived from the uploaded meeting-note layout, retaining
 its official heading, logo and signature areas. Previous company/case names,
-references, dates and findings have been removed. The form does not reuse that
+references, dates and findings have been removed. The body now follows the order
+**company info → meeting date/time/place → legal/notice references → attendees
+and agenda → written note → requests/actions/closing**. Body paragraphs use the
+full available page width, with clean spacing and no hanging indents. Blank
+optional fields do not leave empty sections. The form does not reuse the old
 case's facts. The template references **Khmer MEF1 / Khmer MEF2** fonts; install
 the matching fonts for the original appearance. Check the resulting pagination,
 Khmer shaping and signature positions in Microsoft Word before printing. Cloud

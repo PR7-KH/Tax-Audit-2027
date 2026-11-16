@@ -6,6 +6,7 @@ from unittest.mock import Mock,patch
 from zipfile import ZipFile
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from openpyxl import Workbook,load_workbook
+from openpyxl.styles import Font,Border,Side
 from docx import Document
 from docx.oxml.ns import qn
 import audit_documents as docs
@@ -21,8 +22,11 @@ def company(root):
     wb=Workbook();ws=wb.active;ws.title='Sheet1'
     for row in range(1,7):ws.cell(row,1,f'Label{row}');ws.cell(row,2,f'Value{row}')
     wb.save(info/'ZZ_Company.xlsx')
-    template=Workbook();ws=template.active;ws.title='Sheet1';ws.merge_cells('A1:B1');ws['A1']='Document Request'
+    template=Workbook();ws=template.active;ws.title='Sheet1';ws.merge_cells('A1:B1');ws['A1']='Document Request  ________   '
+    ws['A1'].font=Font(underline='singleAccounting')
     ws['A31']='Closing text';ws.print_area='A1:B32';ws.page_setup.paperSize=ws.PAPERSIZE_A4
+    ws['A32']='________';ws['B31'].border=Border(bottom=Side(style='thin'))
+    ws['A33']='Signature: ________'
     choices=template.create_sheet('Sheet2')
     for i in range(20):choices.cell(i+7,1,f'Request {i+1}')
     template.save(info/'Template.xlsx')
@@ -44,25 +48,73 @@ class AuditDocumentTests(unittest.TestCase):
             self.assertEqual(ws['A16'].value.strip(),'3. Request 5')
             self.assertFalse(ws.row_dimensions[16].hidden);self.assertTrue(ws.row_dimensions[17].hidden)
             self.assertEqual(ws['A31'].value,'Closing text');self.assertIn('A1:B1',[str(r) for r in ws.merged_cells.ranges])
+            self.assertEqual(ws['A1'].value,'Document Request');self.assertEqual(ws['A1'].font.underline,'single')
+            self.assertEqual(ws['A32'].value,'________');self.assertEqual(ws['B31'].border.bottom.style,'thin')
+            self.assertEqual(ws['A33'].value,'Signature: ________')
             self.assertEqual(template.read_bytes(),before)
-            self.assertNotEqual(docs.build_request(root,[0]),output)
+            self.assertEqual(docs.build_request(root,[0]),output)
+            current=load_workbook(output)
+            self.assertIsNone(current.active['A15'].value);self.assertTrue(current.active.row_dimensions[16].hidden)
+            current.close()
+            self.assertEqual(list(output.parent.glob('Doc_Requirement*.xlsx')),[output])
             with self.assertRaisesRegex(ValueError,'17 slots'):docs.build_request(root,list(range(18)))
             with self.assertRaises(ValueError):docs.build_request(root,[])
+
+    def test_request_overwrite_preserves_last_save_on_failure(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            output=docs.publish_request(root,'.xlsx',lambda p:p.write_bytes(b'last complete request'))
+            def failed_save(path):
+                path.write_bytes(b'incomplete');raise RuntimeError('save failed')
+            with self.assertRaisesRegex(RuntimeError,'save failed'):docs.publish_request(root,'.xlsx',failed_save)
+            self.assertEqual(output.read_bytes(),b'last complete request')
+            with patch.object(docs.os,'replace',side_effect=PermissionError('file locked')):
+                with self.assertRaisesRegex(PermissionError,'Close Doc_Requirement.xlsx'):
+                    docs.publish_request(root,'.xlsx',lambda p:p.write_bytes(b'new request'))
+            self.assertEqual(output.read_bytes(),b'last complete request')
+            self.assertFalse(list(root.glob('.doc-request-*')))
+            self.assertEqual(docs.publish_request(root,'.xlsx',lambda p:p.write_bytes(b'new request')),output)
+            self.assertEqual(output.read_bytes(),b'new request')
 
     def test_meeting_word_uses_current_company_and_edited_fields(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);company(root)
             values=docs.default_meeting(docs.company_info(root))
-            values.update(discussion='Current meeting findings\nកំណត់ហេតុថ្មី',requested_documents='Request A\nRequest B',auditors='Current auditor',actions='Follow up next week')
+            values.update(meeting_date='2026-11-16',meeting_details='10:00 at company office',reference='Legal reference',
+                          notice='Current notice',purpose='Current agenda',closing='Meeting closed',
+                          discussion='Current meeting findings\nកំណត់ហេតុថ្មី',requested_documents='Request A\nRequest B',
+                          auditors='Current auditor',actions='Follow up next week')
             output=docs.save_meeting(root,values);document=Document(output)
             text='\n'.join(n.text or '' for n in document._element.iter(qn('w:t')))
             self.assertIn('Value1',text);self.assertIn('កំណត់ហេតុថ្មី',text);self.assertIn('Current auditor',text)
             self.assertIn('Follow up next week',text);self.assertNotIn('{{discussion}}',text)
+            ordered=(values['title'],'Value1','2026-11-16','10:00 at company office','Legal reference',
+                     'Current notice','Current auditor','Current agenda','Current meeting findings',
+                     'Request A','Follow up next week','Meeting closed')
+            positions=[text.index(value) for value in ordered];self.assertEqual(positions,sorted(positions))
+            self.assertEqual(output.name,'Meeting_Note_2026-11-16_Note_1.docx')
+            note=next(p for p in document.paragraphs if 'Current meeting findings' in p.text)
+            self.assertEqual(note.paragraph_format.left_indent,0);self.assertEqual(note.paragraph_format.right_indent,0)
             for old in ('Hoinco','L001-902401242','AU202504070115'):self.assertNotIn(old,text)
             with ZipFile(output) as archive:
                 self.assertIn('word/media/image1.png',archive.namelist())
             self.assertGreater(len(list(document._element.iter(qn('w:txbxContent')))),0)
-            self.assertNotEqual(docs.save_meeting(root,values),output)
+            second=docs.save_meeting(root,values)
+            self.assertEqual(second.name,'Meeting_Note_2026-11-16_Note_2.docx')
+            values['meeting_date']='2026-11-17'
+            self.assertEqual(docs.save_meeting(root,values).name,'Meeting_Note_2026-11-17_Note_1.docx')
+
+    def test_meeting_date_validation_and_empty_optional_fields(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);values=docs.default_meeting([('Company:', 'Current company')])
+            self.assertEqual(values['company_info'],'Company: Current company')
+            for invalid in ('','2026-02-30','not a date','../x'):
+                with self.subTest(date=invalid),self.assertRaisesRegex(ValueError,'YYYY-MM-DD'):
+                    docs.save_meeting(root,dict(values,meeting_date=invalid))
+            self.assertFalse((root/'Audit_Tools').exists())
+            output=docs.save_meeting(root,values)
+            text='\n'.join(p.text for p in Document(output).paragraphs)
+            self.assertNotIn('{{',text);self.assertNotIn('សវនករស្នើសុំឯកសារ',text)
 
     def test_missing_template_and_unknown_info_never_read_template_as_company(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -81,6 +133,12 @@ class AuditDocumentTests(unittest.TestCase):
             with pdfplumber.open(output) as pdf:
                 text=' '.join(p.extract_text() or '' for p in pdf.pages)
                 self.assertIn('Request 1',text);self.assertIn('Value1',text)
+            self.assertEqual(docs.request_pdf(root,[1],renderer='libreoffice'),output)
+            with pdfplumber.open(output) as pdf:
+                text=' '.join(p.extract_text() or '' for p in pdf.pages)
+                self.assertIn('Request 2',text);self.assertNotIn('Request 1',text)
+            self.assertEqual(list(output.parent.glob('Doc_Requirement*.pdf')),[output])
+            self.assertEqual(len(list(output.parent.glob('Doc_Requirement*.xlsx'))),1)
             self.assertEqual(source.read_bytes(),before)
 
     def test_pdf_can_save_beside_toi_without_polluting_source_inventory(self):

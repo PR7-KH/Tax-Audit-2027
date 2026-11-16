@@ -38,7 +38,7 @@ MENU = [
     ("item", "mtr", "MTR Overview"),
     ("item", "consolidate", "Consolidated data"),
     ("item", "tps", "Tax Paid Summary"),
-    ("item", "audit_tools", "Audit Tools"),
+    ("item", "audit_tools", "Tax Audit Tools"),
     ("group", "", "FINANCIAL AUDIT"),
     ("item", "check_fin", "Check source folders"),
     ("item", "fin_SALES", "Sales"),
@@ -1034,7 +1034,7 @@ class App(tk.Tk):
                     self.reset_pending=False;self.reset_session();continue
                 if kind == "audit_tools_loaded":
                     if self.audit_panel is not None:self.audit_panel.populate(msg[1])
-                    self.status("Audit Tools ready.")
+                    self.status("Tax Audit Tools ready.")
                 elif kind == "audit_document_saved":
                     if self.audit_panel is not None:self.audit_panel.saved(msg[1],msg[2])
                     self.status("Saved: "+msg[2])

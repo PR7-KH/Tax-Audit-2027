@@ -1,4 +1,5 @@
 """VBA Module11 document requests and editable Word meeting-note generation."""
+from copy import copy
 from datetime import datetime,timezone,timedelta
 from pathlib import Path
 import os
@@ -16,8 +17,8 @@ from toi_pdf import select_renderer,find_soffice,excel_application,render_excel,
 
 HERE=Path(__file__).resolve().parent
 MEETING_TEMPLATE=HERE/'assets'/'meeting_note_template.docx'
-MEETING_FIELDS=('title','reference','notice','meeting_details','auditors','representatives','company_info',
-                'purpose','discussion','actions','requested_documents','closing')
+MEETING_FIELDS=('title','company_info','meeting_date','meeting_details','reference','notice',
+                'auditors','representatives','purpose','discussion','requested_documents','actions','closing')
 
 
 def company_info(folder):
@@ -56,14 +57,33 @@ def request_items(folder):
     finally:wb.close()
 
 
-def publish_unique(directory,stem,suffix,save):
-    """Stage and publish exclusively, preserving all previous user files."""
+def publish_request(directory,suffix,save):
+    """Replace the current request only after its new file has saved completely."""
     directory=Path(directory);directory.mkdir(parents=True,exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=directory,suffix=suffix,delete=False) as stream:staged=Path(stream.name)
+    target=directory/('Doc_Requirement'+suffix)
+    with tempfile.NamedTemporaryFile(dir=directory,prefix='.doc-request-',suffix=suffix,delete=False) as stream:
+        staged=Path(stream.name)
     try:
         save(staged)
-        target=directory/(stem+suffix);version=2
+        try:os.replace(staged,target)
+        except PermissionError as exc:
+            raise PermissionError(f'Close {target.name} in Excel or the PDF viewer, then save again.') from exc
+        return target
+    finally:staged.unlink(missing_ok=True)
+
+
+def publish_meeting(directory,meeting_date,save):
+    """Keep dated, sequential meeting notes without overwriting earlier notes."""
+    directory=Path(directory);directory.mkdir(parents=True,exist_ok=True)
+    stem=f'Meeting_Note_{meeting_date}_Note_'
+    pattern=re.compile(re.escape(stem)+r'(\d+)\.docx')
+    version=1+max((int(m.group(1)) for p in directory.iterdir() if (m:=pattern.fullmatch(p.name))),default=0)
+    with tempfile.NamedTemporaryFile(dir=directory,prefix='.meeting-note-',suffix='.docx',delete=False) as stream:
+        staged=Path(stream.name)
+    try:
+        save(staged)
         while True:
+            target=directory/f'{stem}{version}.docx'
             try:
                 with target.open('xb') as outgoing:
                     try:
@@ -72,8 +92,23 @@ def publish_unique(directory,stem,suffix,save):
                     except BaseException:
                         target.unlink(missing_ok=True);raise
                 return target
-            except FileExistsError:target=directory/f'{stem}_{version}{suffix}';version+=1
+            except FileExistsError:version+=1
     finally:staged.unlink(missing_ok=True)
+
+
+def clean_request_format(ws):
+    """Use text-length underlines instead of accounting lines or padding."""
+    for row in ws:
+        for cell in row:
+            underline={'singleAccounting':'single','doubleAccounting':'double'}.get(cell.font.underline)
+            if cell.data_type=='s' and isinstance(cell.value,str):
+                text=cell.value.rstrip()
+                if cell.font.underline and text.strip('_ \t\r\n'):
+                    cleaned=re.sub(r'[ \t]*_{3,}$','',text).rstrip()
+                    if cleaned!=text:underline=underline or cell.font.underline or 'single'
+                    cell.value=cleaned
+            if underline:
+                font=copy(cell.font);font.underline=underline;cell.font=font
 
 
 def build_request(folder,indices):
@@ -88,6 +123,7 @@ def build_request(folder,indices):
     for sheet in list(wb):
         if sheet!=ws:wb.remove(sheet)
     ws.title='Doc Requirement'
+    clean_request_format(ws)
     for row,(label,value) in enumerate(details,6):
         for col,text in enumerate((label,value),1):
             cell=ws.cell(row,col,text);cell.data_type='s'
@@ -99,7 +135,7 @@ def build_request(folder,indices):
     for number,index in enumerate(selected,1):ws.cell(13+number,1,f'              {number}. {items[index]}')
     for row in range(16,31):ws.row_dimensions[row].hidden=ws.cell(row,1).value in (None,'')
     ws.sheet_state='visible';wb.active=0
-    try:return publish_unique(Path(folder)/'Audit_Tools','Doc_Requirement','.xlsx',wb.save)
+    try:return publish_request(Path(folder)/'Audit_Tools','.xlsx',wb.save)
     finally:wb.close()
 
 
@@ -117,20 +153,31 @@ def request_pdf(folder,indices,renderer='auto'):
             result=subprocess.run(command,capture_output=True,text=True,timeout=180)
             if result.returncode:raise RuntimeError('PDF renderer failed: '+result.stderr[:300])
         if not pdf.is_file() or pdf.read_bytes()[:5]!=b'%PDF-':raise RuntimeError('The PDF renderer did not produce a valid request PDF.')
-        return publish_unique(destination,'Doc_Requirement','.pdf',lambda p:shutil.copyfile(pdf,p))
+        return publish_request(destination,'.pdf',lambda p:shutil.copyfile(pdf,p))
 
 
 def default_meeting(details):
     values=dict.fromkeys(MEETING_FIELDS,'')
     values.update(title='កំណត់ហេតុស្តីពីការធ្វើសវនកម្ម',
-                  meeting_details=datetime.now(timezone(timedelta(hours=7))).strftime('%Y-%m-%d'),
-                  company_info='\n'.join(f'{label}: {value}' for label,value in details))
+                  meeting_date=datetime.now(timezone(timedelta(hours=7))).strftime('%Y-%m-%d'),
+                  company_info='\n'.join(f"{label.rstrip(' ៖:')}: {value}" for label,value in details))
     return values
 
 
 def save_meeting(folder,values):
     if not str(values.get('title','')).strip():raise ValueError('Enter a meeting-note title.')
+    values=dict(values)
+    meeting_date=values.get('meeting_date',default_meeting([])['meeting_date'])
+    try:meeting_date=datetime.strptime(str(meeting_date).strip(),'%Y-%m-%d').date().isoformat()
+    except ValueError:raise ValueError('Enter the meeting date as YYYY-MM-DD (for example 2026-11-16).') from None
+    values['meeting_date']=meeting_date
     doc=Document(MEETING_TEMPLATE)
+    for paragraph in list(doc.paragraphs):
+        fields=re.findall(r'\{\{(\w+)\}\}',paragraph.text)
+        empty_field=fields and all(not str(values.get(field,'')).strip() for field in fields)
+        empty_requests=paragraph.text=='សវនករស្នើសុំឯកសារ ៖' and not str(values.get('requested_documents','')).strip()
+        if (empty_field and 'discussion' not in fields or empty_requests) and not paragraph._p.xpath('.//w:drawing | .//w:pict'):
+            paragraph._p.getparent().remove(paragraph._p)
     for node in list(doc._element.iter(qn('w:t'))):
         text=node.text or ''
         rendered=re.sub(r'\{\{(\w+)\}\}',lambda m:str(values.get(m.group(1),'')),text)
@@ -154,4 +201,4 @@ def save_meeting(folder,values):
     doc.core_properties.author='Tax Audit';doc.core_properties.last_modified_by='Tax Audit'
     doc.core_properties.created=datetime.now(timezone.utc)
     doc.core_properties.modified=datetime.now(timezone.utc)
-    return publish_unique(Path(folder)/'Audit_Tools','Meeting_Note','.docx',doc.save)
+    return publish_meeting(Path(folder)/'Audit_Tools',meeting_date,doc.save)

@@ -19,8 +19,8 @@ Check against a V5.1 workbook built from the same folder (needs LibreOffice):
 TOI PDF export (Module 10) is available under TOIs Overview → Export TOI PDF
 using Microsoft Excel on Mac/Windows, with LibreOffice as an optional alternative.
 The desktop Control Center is implemented in control_center.py.
-Audit Tools → Document Request reproduces the VBA Module11 checklist using
-Info/Template.xlsx. Audit Tools → Meeting Notes saves editable Word documents
+Tax Audit Tools → Document Request reproduces the VBA Module11 checklist using
+Info/Template.xlsx. Tax Audit Tools → Meeting Notes saves editable Word documents
 with the selected company's Info details.
 
 Interface updates and Mac upgrade checks: see [UI_MAC_TEST.md](UI_MAC_TEST.md).
@@ -56,7 +56,7 @@ in `.tax-audit-conversions.json`; use **Results → Open Excel** to inspect them
 The overview refreshes automatically and distinguishes conversion completion from
 reviewed/import-ready financial data. See UI_MAC_TEST.md for the full workflow.
 
-The update bundle includes twelve files, including both Audit Tools modules and
+The update bundle includes twelve files, including both Tax Audit Tools modules and
 `assets/meeting_note_template.docx`. Copy the **assets folder** too, and rerun
 the Mac installer to install python-docx. Selecting a new
 company folder with no recognized target folders automatically organizes explicit
@@ -91,6 +91,12 @@ App-generated PDFs saved in TOI are recorded separately from raw source PDFs.
 Successful **Build all data** plays a short notification sound. **Refresh**
 clears the whole session, including company selection, previews, cached data and
 unsaved meeting edits. If a job is running, reset waits for it to finish safely.
-Saved documents and source files remain on disk. Audit Tools outputs are saved
-under the selected company's **Audit_Tools** folder with numbered versions.
+Saved documents and source files remain on disk. Tax Audit Tools outputs are saved
+under the selected company's **Audit_Tools** folder. Document requests reuse
+**Doc_Requirement.xlsx / .pdf**, replacing the previous save of each format.
+Meeting notes keep dated, sequential files such as
+**Meeting_Note_2026-11-16_Note_1.docx** and **Meeting_Note_2026-11-16_Note_2.docx**.
+Their body order is company info, meeting date/time/place, legal references and
+the written note; the official heading/title is retained. A large writing pane
+sits beside the meeting details, with a separate Requests & follow-up tab.
 See [UI_MAC_TEST.md](UI_MAC_TEST.md) for template setup and native testing steps.
