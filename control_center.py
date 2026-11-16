@@ -16,9 +16,9 @@ sys.path.insert(0, str(HERE))
 import calc  # noqa: E402
 import engine  # noqa: E402
 
-NAVY, SIDE, SIDE_HOVER, ACCENT = "#12294a", "#16335c", "#21487a", "#2f80d0"
-GREEN, BG, CARD, TEXT, MUTED = "#1a7f5a", "#eef2f7", "#ffffff", "#1b2733", "#5d6b7e"
-LINE = "#d3dbe6"
+NAVY, SIDE, SIDE_HOVER, ACCENT = "#101f35", "#14263f", "#203a58", "#087f8c"
+GREEN, BG, CARD, TEXT, MUTED = "#167459", "#f0f4f8", "#ffffff", "#172b43", "#61748b"
+LINE = "#d7e1eb"
 FONT = "Helvetica"
 NUMBER = re.compile(r"^-?[\d,]+(\.\d+)?%?$")
 
@@ -79,6 +79,21 @@ def open_path(path):
         subprocess.run(["xdg-open", str(path)])
 
 
+def report_row_tag(values, index, numbered=False):
+    """Presentation only: emphasize report sections, totals and source status."""
+    content = values[1:] if numbered else values
+    text = [str(v).strip().casefold() for v in content if v not in (None, "")]
+    if any(v.startswith(("error:", "cannot open:", "#ref!", "#value!", "#div/0!")) for v in text):
+        return "error"
+    if any(v in ("missing", "empty", "folder not found") for v in text):
+        return "warning"
+    if text and (text[0] in ("total", "grand total") or text[0].startswith("subtotal ")):
+        return "total"
+    if text and (text[0] == "year" or text[0].startswith(("folder:", "year:"))):
+        return "section"
+    return "odd" if index % 2 else "even"
+
+
 class Btn(tk.Label):
     """Flat button built from a Label so colours survive macOS dark mode."""
 
@@ -118,15 +133,22 @@ class App(tk.Tk):
         self.build_body()
         self.status("Select the company folder to begin.")
         self.after(120, self.poll)
+        self.after_idle(lambda: self.attributes("-fullscreen", True))
+        self.bind("<Escape>", lambda event: self.attributes("-fullscreen", False))
+        self.bind("<F11>", self.toggle_fullscreen)
+
+    def toggle_fullscreen(self, event=None):
+        self.attributes("-fullscreen", not self.attributes("-fullscreen"))
+        return "break"
 
     # ------------------------------------------------------------ layout
     def setup_styles(self):
         st = ttk.Style(self)
         st.theme_use("clam")
         st.configure("Treeview", background=CARD, fieldbackground=CARD, foreground=TEXT,
-                     rowheight=25, borderwidth=0, font=(FONT, 11))
-        st.configure("Treeview.Heading", background="#dce6f1", foreground=NAVY,
-                     font=(FONT, 11, "bold"), relief="flat", padding=(6, 6))
+                     rowheight=32, borderwidth=1, relief="solid", font=(FONT, 11, "bold"))
+        st.configure("Treeview.Heading", background="#e4edf5", foreground=NAVY,
+                     font=(FONT, 11, "bold"), relief="raised", padding=(10, 10))
         st.map("Treeview", background=[("selected", ACCENT)], foreground=[("selected", "white")])
         st.configure("Vertical.TScrollbar", background="#c4cedb", troughcolor=BG, borderwidth=0)
         st.configure("Horizontal.TScrollbar", background="#c4cedb", troughcolor=BG, borderwidth=0)
@@ -134,11 +156,13 @@ class App(tk.Tk):
     def build_header(self):
         head = tk.Frame(self, bg=NAVY)
         head.pack(fill="x")
-        tk.Label(head, text="TAX & FINANCIAL CONTROL CENTER", bg=NAVY, fg="white",
+        tk.Label(head, text="AUDIT  /  FINANCE", bg=NAVY, fg="white",
                  font=(FONT, 18, "bold")).pack(side="left", padx=22, pady=(14, 14))
-        tk.Label(head, text="Tax audit  •  Financial audit  •  Offline", bg=NAVY, fg="#9db4d3",
+        tk.Label(head, text="PRIVATE WORKSPACE  •  LOCAL FILES", bg=NAVY, fg="#9db4d3",
                  font=(FONT, 11)).pack(side="left", pady=(18, 0))
 
+        Btn(head, "Exit full screen", lambda: self.attributes("-fullscreen", False),
+            color=SIDE, hover=SIDE_HOVER).pack(side="right", padx=18)
         bar = tk.Frame(self, bg=CARD, highlightthickness=1, highlightbackground=LINE)
         bar.pack(fill="x")
         row = tk.Frame(bar, bg=CARD)
@@ -152,7 +176,7 @@ class App(tk.Tk):
         Btn(row, "Refresh", self.refresh, color="#5d7391").pack(side="left")
         opt = tk.Frame(bar, bg=CARD)
         opt.pack(fill="x", padx=18, pady=(0, 10))
-        tk.Label(opt, text="One folder holds both: PR, SR, TOS, WHT, TOI, Info  and  GL, TB, Bank, Sales",
+        tk.Label(opt, text="SOURCE WORKSPACE  /  Tax returns & financial documents",
                  bg=CARD, fg=MUTED, font=(FONT, 10)).pack(side="left")
         tk.Checkbutton(opt, text="Fill ADT rows V5.1 leaves blank", variable=self.link_all, bg=CARD, fg=TEXT,
                        activebackground=CARD, activeforeground=TEXT, selectcolor=CARD, font=(FONT, 10),
@@ -196,23 +220,56 @@ class App(tk.Tk):
         top.pack(fill="x")
         titles = tk.Frame(top, bg=BG)
         titles.pack(side="left", fill="x", expand=True)
-        self.title_lbl = tk.Label(titles, text="Welcome", bg=BG, fg=NAVY, font=(FONT, 20, "bold"), anchor="w")
+        self.title_lbl = tk.Label(titles, text="Your audit workspace", bg=BG, fg=NAVY, font=(FONT, 20, "bold"), anchor="w")
         self.title_lbl.pack(fill="x")
         self.sub_lbl = tk.Label(titles, text="Choose a report on the left. Reports open for viewing; export when you want a file.",
                                 bg=BG, fg=MUTED, font=(FONT, 11), anchor="w", justify="left", wraplength=700)
         self.sub_lbl.pack(fill="x")
-        tools = tk.Frame(top, bg=BG)
-        tools.pack(side="right")
+        tools = tk.Frame(main, bg=BG)
+        tools.pack(fill="x", pady=(14, 4))
         self.btn_export = Btn(tools, "Export this report", self.export_this, color=GREEN, hover="#14664a")
         self.btn_export.pack(side="left", padx=4)
         Btn(tools, "Export everything", self.export_all).pack(side="left", padx=4)
         Btn(tools, "Open last export", lambda: self.open_if(self.last_export), color="#5d7391").pack(side="left", padx=4)
 
+        self.sub_lbl.bind("<Configure>", lambda event: self.sub_lbl.configure(
+            wraplength=max(240, event.width - 12)))
+        overview = tk.Frame(main, bg=BG)
+        overview.pack(fill="x", pady=(12, 8))
+        self.metric_values = {}
+        for index, (key, title, value) in enumerate((
+                ("company", "COMPANY WORKSPACE", "Select a company folder"),
+                ("report", "ACTIVE VIEW", "Overview"),
+                ("rows", "VISIBLE ROWS", "0"))):
+            overview.columnconfigure(index, weight=1, uniform="metrics")
+            tile = tk.Frame(overview, bg=CARD, highlightthickness=1, highlightbackground=LINE)
+            tile.grid(row=0, column=index, sticky="nsew", padx=(0 if index == 0 else 6, 0))
+            tk.Label(tile, text=title, bg=CARD, fg=MUTED,
+                     font=(FONT, 9, "bold"), anchor="w").pack(fill="x", padx=16, pady=(12, 4))
+            label = tk.Label(tile, text=value, bg=CARD, fg=NAVY,
+                             font=(FONT, 14, "bold"), anchor="w")
+            label.pack(fill="x", padx=16, pady=(0, 14))
+            label.bind("<Configure>", lambda event, label=label: label.configure(
+                wraplength=max(80, event.width - 8)))
+            self.metric_values[key] = label
+
         self.picker = tk.Frame(main, bg=BG)
         self.picker.pack(fill="x", pady=(10, 0))
         card = tk.Frame(main, bg=CARD, highlightthickness=1, highlightbackground=LINE)
         card.pack(fill="both", expand=True, pady=(8, 8))
+        tk.Label(card, text="REPORT DETAIL     •     Preview only — export to save a workbook",
+                 bg="#e4edf5", fg=NAVY, anchor="w", padx=14, pady=10,
+                 font=(FONT, 10, "bold")).pack(fill="x")
         self.tree = ttk.Treeview(card, show="headings", selectmode="browse")
+        for tag, options in {
+            "even": {"background": "#ffffff"},
+            "odd": {"background": "#f2f6fa"},
+            "section": {"background": "#dce9f3", "foreground": NAVY},
+            "total": {"background": "#d9eee7", "foreground": "#12533f"},
+            "warning": {"background": "#fff1dc", "foreground": "#854c0a"},
+            "error": {"background": "#fbe5e7", "foreground": "#9a293c"},
+        }.items():
+            self.tree.tag_configure(tag, **options)
         ys = ttk.Scrollbar(card, orient="vertical", command=self.tree.yview)
         xs = ttk.Scrollbar(card, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscrollcommand=ys.set, xscrollcommand=xs.set)
@@ -264,7 +321,7 @@ class App(tk.Tk):
             self.open_report(self.current["key"])
 
     # ------------------------------------------------------------ table drawing
-    def draw(self, columns, rows, align_right=True):
+    def draw(self, columns, rows, align_right=True, sheet=None):
         self.tree.delete(*self.tree.get_children())
         ids = [f"c{i}" for i in range(len(columns))]
         self.tree["columns"] = ids
@@ -276,12 +333,22 @@ class App(tk.Tk):
             self.tree.heading(cid, text=name)
             self.tree.column(cid, width=max(48, min(longest * 8 + 22, 420)), minwidth=40,
                              anchor="e" if numeric else "w", stretch=False)
-        for r in rows:
-            self.tree.insert("", "end", values=[("" if v is None else v) for v in r])
+        for index, r in enumerate(rows):
+            values = [("" if v is None else v) for v in r]
+            tag = report_row_tag(values, index, sheet is not None)
+            if sheet is not None and tag in ("even", "odd"):
+                cells = list(sheet.iter_rows(min_row=index + 1, max_row=index + 1))[0]
+                if any(c.value is not None and c.font.bold for c in cells):
+                    tag = "section"
+            self.tree.insert("", "end", values=values, tags=(tag,))
+        self.metric_values["company"].config(text=Path(self.folder.get()).name if self.folder.get() else "Select a company folder")
+        self.metric_values["report"].config(text=self.title_lbl.cget("text"))
+        self.metric_values["rows"].config(text=f"{len(rows):,}")
 
     def draw_sheet(self, rows, ncols):
         letters = [calc_letter(i + 1) for i in range(ncols)]
-        self.draw(["#"] + letters, [[n + 1] + r for n, r in enumerate(rows)])
+        sheet = self.built[1][self.current["sheet"]] if self.built else None
+        self.draw(["#"] + letters, [[n + 1] + r for n, r in enumerate(rows)], sheet=sheet)
 
     def set_picker(self, names, active):
         for w in self.picker.winfo_children():
