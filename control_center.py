@@ -17,7 +17,8 @@ sys.path.insert(0, str(HERE))
 import calc  # noqa: E402
 import engine  # noqa: E402
 from input_tools import (source_inventory, validate_sources, convert_pdf, selected_pdfs,
-                         batch_convert_pdfs, conversion_records, converted_output, target_files, view_pdfs)
+                         batch_convert_pdfs, conversion_records, converted_output, target_files, view_pdfs, organize_downloads)
+from toi_pdf import export_toi_pdfs, parse_steps
 
 NAVY, SIDE, SIDE_HOVER, ACCENT = "#101f35", "#14263f", "#203a58", "#087f8c"
 GREEN, BG, CARD, TEXT, MUTED = "#167459", "#f0f4f8", "#ffffff", "#172b43", "#61748b"
@@ -45,7 +46,7 @@ MENU = [
     ("group", "", "SYSTEM"),
     ("item", "log", "Processing log"),
 ]
-ACTION_TITLES = {"conversion_results": "PDF conversion results","sources": "Source overview", "source_files": "File details",
+ACTION_TITLES = {"import_results": "Download import results","conversion_results": "PDF conversion results","sources": "Source overview", "source_files": "File details",
                  "check_tax": "Validate source files", "build_all": "Build all data"}
 SUBTITLE = {
     "sources": "Company file counts by tax year and financial folder. No workbook contents are opened.",
@@ -139,6 +140,7 @@ class App(tk.Tk):
         self.search_hits = []
         self.search_index = -1
         self.search_target = None
+        self.import_results = []
         self.last_conversion_results = []
         self.conversion_note = ""
         self.last_table = None
@@ -254,12 +256,19 @@ class App(tk.Tk):
         tk.Spinbox(self.tax_options, from_=1, to=12, width=4, textvariable=self.months).pack(side="left", padx=8)
         Btn(self.tax_options, "Apply", self.apply_months).pack(side="left")
 
+        self.toi_pdf_options = tk.Frame(main, bg=BG)
+        tk.Label(self.toi_pdf_options, text="VBA Module 10 · steps", bg=BG, fg=TEXT).pack(side="left")
+        self.toi_steps = tk.StringVar(value="1-17")
+        tk.Entry(self.toi_pdf_options, textvariable=self.toi_steps, width=8).pack(side="left", padx=6)
+        Btn(self.toi_pdf_options, "Export TOI PDFs", self.export_toi_pdf).pack(side="left", padx=3)
+        Btn(self.toi_pdf_options, "Open PDF folder", lambda: self.open_if(Path(self.folder.get())/"TOI_PDFs")).pack(side="left", padx=3)
         self.source_controls = tk.Frame(main, bg=BG)
         Btn(self.source_controls, "Format summary", lambda: self.open_report("sources")).pack(side="left", padx=3)
         Btn(self.source_controls, "Validate files", lambda: self.open_report("check_tax")).pack(side="left", padx=3)
         Btn(self.source_controls, "Convert selected row", lambda: self.convert_target_pdfs(False), padx=8).pack(side="left", padx=3)
         Btn(self.source_controls, "Convert all target PDFs", lambda: self.convert_target_pdfs(True), padx=8).pack(side="left", padx=3)
         Btn(self.source_controls, "Open Excel", self.open_converted_excel, padx=8).pack(side="left", padx=3)
+        Btn(self.source_controls, "Import log", lambda: self.open_report("import_results"), padx=6).pack(side="left", padx=2)
         Btn(self.source_controls, "Results", lambda: self.open_report("conversion_results"), padx=8).pack(side="left", padx=3)
         self.search_controls = tk.Frame(main, bg=BG)
         tk.Label(self.search_controls, text="Search all tax sheets", bg=BG, fg=TEXT).pack(side="left")
@@ -339,7 +348,11 @@ class App(tk.Tk):
         if d and not self.busy:
             self.folder.set(d)
             self.invalidate()
-            self.open_report("sources")
+            self.run_bg(self.job_prepare_sources)
+
+    def job_prepare_sources(self):
+        report = organize_downloads(self.job_settings[0])
+        return ("prepared_sources",report)
 
     def need_folder(self):
         if not self.folder.get().strip() or not Path(self.folder.get()).is_dir():
@@ -358,6 +371,7 @@ class App(tk.Tk):
         self.search_hits = []
         self.search_target = None
         self.conversion_note = ""
+        self.import_results = []
         self.last_conversion_results = []
 
     def refresh(self):
@@ -509,6 +523,18 @@ class App(tk.Tk):
     def show_sheet(self, name):
         if self.busy:
             return
+        self.toi_pdf_options.pack_forget()
+        self.btn_export.set_enabled((self.current or {}).get("key") in engine.SECTIONS)
+        if name == "Export TOI PDF":
+            self.current.pop("sheet",None)
+            self.set_picker(list(self.current["tables"]), name)
+            self.toi_pdf_options.pack(fill="x", after=self.picker, pady=4)
+            self.btn_export.set_enabled(False)
+            self.page_label.config(text="")
+            self.draw(["TOI PDF export"], [["Export selected steps from every TOI .xlsx file to TOI_PDFs."],
+                      ["Use 1-17 for all steps, or a range such as 4-4."],
+                      ["Requires LibreOffice. Source workbooks and existing PDFs are preserved."]])
+            return
         self.current["sheet"] = name
         self.set_picker(list(self.current["tables"]), name)
         page = self.sheet_pages.get(name, 0)
@@ -518,6 +544,42 @@ class App(tk.Tk):
             self.present_page(self.page_cache[cache_key])
         else:
             self.run_bg(self.job_page, name, page)
+
+    def export_toi_pdf(self):
+        if self.busy or not self.need_folder():
+            return
+        value = self.toi_steps.get()
+        try:
+            parse_steps(value)
+        except ValueError as exc:
+            self.status(str(exc));return
+        self.run_bg(self.job_toi_pdf,value)
+
+    def job_toi_pdf(self,value):
+        rows = export_toi_pdfs(self.job_settings[0],value,
+                    progress=lambda done,total: self.q.put(("pdf_progress",done,total)))
+        return ("toi_pdfs_done",rows)
+
+    def job_tois(self):
+        key = self.job_settings
+        if self.built and self.built[0] == key and {"TOI","FULL TOI"} <= set(self.built[1].sheetnames):
+            wb = self.built[1]
+        else:
+            root = Path(key[0]); directory = engine.find_dir(root,"TOI")
+            source = engine.first_xlsx(directory) if directory else None
+            if source is None:
+                raise ValueError("Put the TOI Excel workbook(s) in the TOI folder first.")
+            wb,log = engine.Workbook(),engine.Log();wb.remove(wb.active)
+            input_book = engine.load_workbook(source,data_only=True)
+            try:
+                engine.build_toi(wb,input_book,log)
+                engine.build_full_toi(wb,input_book,log)
+            finally:
+                input_book.close()
+            self.built = (key,wb,log,calc.Calc(wb))
+            self.partial_build = True
+            self.page_cache.clear();self.sheet_pages.clear();self.sheet_dimensions.clear()
+        return ("sheets","tois",dict.fromkeys(["TOI","FULL TOI","Export TOI PDF"]))
 
     def pdf_row_action(self, event):
         if self.current and self.current.get("key") in ("check_tax", "conversion_results"):
@@ -637,16 +699,22 @@ class App(tk.Tk):
         self.search_label.config(text="")
         if key == "consolidate":
             self.search_controls.pack(fill="x", before=self.picker, pady=3)
-        if key in ("sources", "source_files", "check_tax", "conversion_results", "check_fin") or key.startswith("fin_"):
+        if key in ("sources", "source_files", "check_tax", "conversion_results", "import_results", "check_fin") or key.startswith("fin_"):
             self.source_controls.pack(fill="x", before=self.picker, pady=3)
         self.page_label.config(text="")
         self.tax_options.pack_forget()
+        self.toi_pdf_options.pack_forget()
         self.dashboard_options.pack_forget()
         if key == "dashboard":
             self.dashboard_options.pack(side="left", padx=6)
         if key == "tps":
             self.tax_options.pack(fill="x", before=self.picker, pady=4)
         self.btn_export.set_enabled(key in engine.SECTIONS)
+        if key == "import_results":
+            self.set_picker([], "")
+            self.draw(["Download source", "Destination", "Result"],self.import_results)
+            self.status("Only initial setup is automatic. Existing target folders are left unchanged.")
+            return
         if key == "conversion_results":
             self.set_picker([], "")
             self.draw(["Folder", "Scope", "PDF", "Rows", "Result", "Excel output"], self.last_conversion_results)
@@ -668,7 +736,10 @@ class App(tk.Tk):
             return
         if not self.need_folder():
             return
-        self.run_bg(self.job_report, key)
+        if key == "tois":
+            self.run_bg(self.job_tois)
+        else:
+            self.run_bg(self.job_report, key)
 
     def run_bg(self, fn, *args):
         if self.busy:
@@ -694,7 +765,8 @@ class App(tk.Tk):
     def ensure_built(self, summary_only=False):
         key = self.job_settings
         needs_full = not summary_only and getattr(self, "partial_build", False) is True
-        if self.built is None or self.built[0] != key or needs_full:
+        needs_summary = summary_only and self.built is not None and "Tax Paid Summary" not in self.built[1]
+        if self.built is None or self.built[0] != key or needs_full or needs_summary:
             if summary_only and self.built is None:
                 info_dir = engine.find_dir(Path(key[0]), "INFO")
                 info_file = engine.first_xlsx(info_dir) if info_dir else None
@@ -799,6 +871,8 @@ class App(tk.Tk):
                     f"Built {len(rows)} sheets in memory. Open each report on the left, or press Export everything.",
                     True)
         names = [n for n in wb.sheetnames if n in engine.SECTIONS[key][1]]
+        if key == "dashboard":
+            names = [n for n in names if n != "TOI"]  # keep hidden workbook dependency for dashboard formulas/export
         if key == "mtr":
             names = [n for n in ("MTR_PR", "MTR_SR", "MTR_TOS", "MTR_WHT", "Summary MTR") if n in names]
         tables = dict.fromkeys(names)
@@ -810,12 +884,23 @@ class App(tk.Tk):
             while True:
                 msg = self.q.get_nowait()
                 kind = msg[0]
-                if kind == "batch_progress":
-                    self.status(f"Converting target PDFs: {msg[1]} / {msg[2]} completed…")
+                if kind in ("batch_progress", "pdf_progress"):
+                    action = "Exporting TOI PDFs" if kind == "pdf_progress" else "Converting target PDFs"
+                    self.status(f"{action}: {msg[1]} / {msg[2]} completed…")
                     continue
                 self.busy = False
                 self.config(cursor="")
-                if kind == "batch_done":
+                if kind == "prepared_sources":
+                    self.import_results = msg[1]
+                    moved = sum(r[2]=="MOVED" for r in msg[1])
+                    if msg[1]:
+                        self.conversion_note = f"Download setup: {moved} moved, {len(msg[1])-moved} left for review. See Import log."
+                    self.open_report("sources")
+                elif kind == "toi_pdfs_done":
+                    self.draw(["TOI workbook", "Steps", "Result", "PDF file"],msg[1])
+                    successful = sum(r[2]=="EXPORTED" for r in msg[1])
+                    self.status(f"TOI PDF export: {successful}/{len(msg[1])} workbooks exported. See TOI_PDFs.")
+                elif kind == "batch_done":
                     self.last_conversion_results = msg[1]
                     self.conversion_note = msg[2]
                     self.inventory = None

@@ -99,7 +99,7 @@ class PreviewTests(unittest.TestCase):
         with patch.object(ui.filedialog, 'askdirectory', return_value='/company'):
             ui.App.pick_folder(app)
         app.folder.set.assert_called_once_with('/company')
-        app.open_report.assert_called_once_with('sources')
+        app.run_bg.assert_called_once_with(app.job_prepare_sources)
 
     def test_busy_export_does_not_start_another_worker(self):
         app = Mock(); app.busy = True

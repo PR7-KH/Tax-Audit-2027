@@ -16,8 +16,9 @@ Check against a V5.1 workbook built from the same folder (needs LibreOffice):
 
     python3 -I verify.py output.xlsx Audit_Engine_V5.1_Python.xlsm
 
-Not yet ported: TOI PDF export (Module 10), report builder (Module 11),
-the Control Center window (control_center.py).
+TOI PDF export (Module 10) is available under TOIs Overview → Export TOI PDF
+using LibreOffice. The desktop Control Center is implemented in control_center.py.
+The VBA report builder (Module 11) remains separate from this workflow.
 
 Interface updates and Mac upgrade checks: see [UI_MAC_TEST.md](UI_MAC_TEST.md).
 Tax Paid Summary uses all 12 months of the older Info year and `--months` of the
@@ -31,17 +32,17 @@ extraction. When updating an existing Mac installation, copy the new
 `bash Install_Update_Mac.command`. See UI_MAC_TEST.md for review requirements;
 PDF extraction does not automatically validate tax layouts or bank balances.
 
-### Download the five-file Mac update
+### Download the Mac update
 
 [Download Tax-Audit-Mac-Update.zip](https://github.com/PR7-KH/Tax-Audit-2027/raw/refs/heads/main/downloads/Tax-Audit-Mac-Update.zip)
 
-Unzip it and copy the five files inside `Tax-Audit-Mac-Update` into your existing
+Unzip it and copy all files inside `Tax-Audit-Mac-Update` into your existing
 app folder, replacing matching files. Keep your templates and company data.
 From Terminal in the app folder, run `bash Install_Update_Mac.command`, then
 launch normally. Back up your working folder first.
 
 For future updates, rebuild the ZIP with `python3 scripts/package_mac_update.py`
-after changing any of the five files, and commit the refreshed ZIP alongside
+after changing any of the bundled files, and commit the refreshed ZIP alongside
 the source changes.
 
 Batch conversion: select a source folder/year row and choose **Convert selected
@@ -50,3 +51,8 @@ folders. Outputs are preserved under `.pdf-extractions`, with source-hash histor
 in `.tax-audit-conversions.json`; use **Results → Open Excel** to inspect them.
 The overview refreshes automatically and distinguishes conversion completion from
 reviewed/import-ready financial data. See UI_MAC_TEST.md for the full workflow.
+
+The update bundle now includes `toi_pdf.py` (six files total). Selecting a new
+company folder with no recognized target folders automatically organizes explicit
+filenames from its Download child. See UI_MAC_TEST.md for routing rules and the
+LibreOffice requirement for TOI PDF export.

@@ -3,6 +3,8 @@ from collections import Counter
 from pathlib import Path
 import hashlib
 import json
+import re
+import shutil
 import os
 import tempfile
 from openpyxl import Workbook, load_workbook
@@ -308,3 +310,81 @@ def batch_convert_pdfs(folder, sources=None, progress=None):
         if progress:
             progress(index,len(chosen))
     return results
+
+
+def classify_download(path):
+    """Classify only explicit filename tokens; leave uncertain files alone."""
+    text = re.sub(r'[^a-z0-9]+',' ',Path(path).stem.casefold()).strip()
+    patterns = {
+        'PR': r'\b(purchases?|pr)\b', 'SR': r'\b(sales?|sr)\b',
+        'TOS': r'\b(salary tax|salarytax|tos)\b', 'WHT': r'\b(withholding tax|withholdingtax|wht)\b',
+        'GL': r'\b(gl|general ledger)\b', 'TB': r'\b(tb|trial balance)\b',
+        'BANK': r'\b(bank|bank statement)\b', 'AR': r'\b(ar|receivables?|a r)\b',
+        'EXPENSE': r'\b(expenses?|purchase ledger)\b', 'TOI':r'\btoi\b', 'Info':r'\b(company info|info)\b',
+    }
+    found=[name for name,pattern in patterns.items() if re.search(pattern,text)]
+    # Explicit purchase-ledger files are finance, not tax purchases.
+    if 'EXPENSE' in found and 'purchase ledger' in text and 'PR' in found:
+        found.remove('PR')
+    if len(found)!=1:
+        return None,None,'Ambiguous filename' if found else 'Unrecognized filename'
+    target=found[0]
+    year=None
+    if target in engine.cons.LAYOUTS:
+        years=set(re.findall(r'(?<!\d)(20\d{2})(?!\d)',Path(path).stem))
+        if len(years)!=1:
+            return None,None,'Tax filename must identify one year (20xx)'
+        year=next(iter(years))
+    return target,year,''
+
+
+def organize_downloads(folder):
+    """First-selection setup only. Existing target folders disable this workflow."""
+    root=Path(folder).resolve()
+    if target_folders(root):
+        return []
+    downloads=[p for p in root.iterdir() if p.is_dir() and p.name.casefold()=='download']
+    if len(downloads)!=1 or not downloads[0].resolve().is_relative_to(root):
+        return []
+    download=downloads[0]
+    reports=[]
+    journal=root/'.tax-audit-imports.jsonl'
+    for source in visible_files(download):
+        rel=source.relative_to(root)
+        if source.is_symlink() or not source.resolve().is_relative_to(download.resolve()):
+            reports.append([str(rel),'','SKIPPED: linked file outside Download scope']);continue
+        if source.suffix.lower() not in engine.FIN_EXT:
+            reports.append([str(rel),'','SKIPPED: unsupported format']);continue
+        target,year,reason=classify_download(source)
+        if not target:
+            reports.append([str(rel),'','SKIPPED: '+reason]);continue
+        directory=root/target
+        if year:
+            directory/=year
+        destination=directory/source.name
+        created=False
+        try:
+            directory.mkdir(parents=True,exist_ok=True)
+            if any(p.name.casefold()==source.name.casefold() for p in directory.iterdir()):
+                reports.append([str(rel),str(destination.relative_to(root)),'SKIPPED: destination already exists']);continue
+            digest=file_hash(source)
+            record={'source':str(rel),'destination':str(destination.relative_to(root)),'sha256':digest}
+            with journal.open('a',encoding='utf-8') as log:
+                log.write(json.dumps(dict(record,status='planned'))+'\n');log.flush();os.fsync(log.fileno())
+            with destination.open('xb') as output:
+                created=True
+                with source.open('rb') as stream:
+                    shutil.copyfileobj(stream,output)
+                output.flush();os.fsync(output.fileno())
+            if file_hash(destination)!=digest or file_hash(source)!=digest:
+                raise ValueError('File changed during transfer; original retained')
+            shutil.copystat(source,destination)
+            source.unlink()
+            with journal.open('a',encoding='utf-8') as log:
+                log.write(json.dumps(dict(record,status='moved'))+'\n')
+            reports.append([str(rel),str(destination.relative_to(root)),'MOVED'])
+        except Exception as exc:
+            if created and source.exists():
+                destination.unlink(missing_ok=True)
+            reports.append([str(rel),str(destination.relative_to(root)),'ERROR: '+str(exc).splitlines()[0]])
+    return reports

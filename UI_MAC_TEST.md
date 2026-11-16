@@ -69,3 +69,65 @@ Results and Bank, partial failures and retry behavior without callback errors.
 Native Mac appearance and the contents of your real bank PDFs need your test.
 
 Run `python -m unittest discover -s tests -v` to rerun the automated suite.
+
+## TOI PDF export (VBA Module 10 port)
+
+The update ZIP now contains **six** files: copy all of them, including the new
+`toi_pdf.py`. In TOIs Overview, select **Export TOI PDF**, enter a step range
+(default `1-17`, or for example `4-4`), and click **Export TOI PDFs**. All .xlsx
+files directly inside the company's TOI folder are processed. One PDF per input
+workbook is saved to `TOI_PDFs`, with progress and per-file results. Existing PDFs
+get a numbered successor rather than being replaced. Original workbooks are not
+saved or changed. TOI preview/export can run without building the audit dashboard.
+The TOI comparison tab is removed from the dashboard preview; its workbook data
+is retained internally so dashboard formulas and exports continue to work.
+
+PDF rendering requires LibreOffice. On Mac, install LibreOffice in Applications
+from https://www.libreoffice.org/download/download-libreoffice/ and retry; the
+app also detects soffice/libreoffice on PATH. Excel is not controlled through
+AppleScript. The PDF action gives an explicit setup message when the renderer
+is missing. Other application features do not require this installation.
+
+Print columns, row heights, A–D widths, A4 orientation, fit-to-page limits,
+centering and margins follow the supplied VBA Module10. E–I AutoFit is
+approximated from text width; fonts and pagination can differ between Excel and
+LibreOffice. Compare a real company export visually with your trusted VBA PDF.
+Nonselected sheets are hidden in a temporary copy. No uploaded VBA is executed.
+
+## Automatic Download-folder setup
+
+Select the company folder containing a direct child named `Download`. If **any**
+recognized target folder already exists, automatic organization does nothing.
+Otherwise the app moves files with explicit names into newly needed folders:
+
+| Filename token | Destination |
+| --- | --- |
+| Purchase / PR | PR / year |
+| Sale / Sales / SR | SR / year |
+| Salary_Tax / TOS | TOS / year |
+| WITHHOLDING_TAX / WHT | WHT / year |
+| GL / General Ledger | GL |
+| TB / Trial Balance | TB |
+| Bank / Bank Statement | BANK |
+| AR / Receivable | AR |
+| Expense / Purchase Ledger | EXPENSE |
+| TOI | TOI |
+| Info / Company Info | Info |
+
+Monthly tax filenames must identify exactly one 20xx year, for example
+`L001_Purchase_01_2025.xlsx`. Missing years, unknown/ambiguous names, unsupported
+formats and conflicts are left inside Download and reported under **Import log**.
+Files in subfolders of Download are considered, but outside-linked files are
+not moved. Source bytes are verified before deletion; existing destinations are
+never overwritten. A hidden `.tax-audit-imports.jsonl` records planned/completed
+moves and hashes. Keep it for tracing or manually reversing an import. Move
+results remain visible until Refresh/company change; the journal remains on disk.
+New files added after target folders exist must be placed manually, matching the
+requested existing-folder behavior. This setup does not infer a file's format
+or business correctness from its name; normal validation still applies afterward.
+
+36 regression tests passed, including real LibreOffice PDF rendering/content,
+orientation and source/output preservation, Download mappings, ambiguity,
+conflicts and existing-target no-op behavior. A live Linux Tk check passed folder
+selection/organization, Import log, independent TOI preview, real PDF export,
+return to preview and Tax Paid Summary after a partial TOI build.

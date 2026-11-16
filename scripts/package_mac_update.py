@@ -7,6 +7,7 @@ FILES = (
     'control_center.py',
     'engine.py',
     'input_tools.py',
+    'toi_pdf.py',
     'requirements.txt',
     'Install_Update_Mac.command',
 )
