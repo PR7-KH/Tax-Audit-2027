@@ -56,3 +56,9 @@ The update bundle now includes `toi_pdf.py` (six files total). Selecting a new
 company folder with no recognized target folders automatically organizes explicit
 filenames from its Download child. See UI_MAC_TEST.md for routing rules and the
 LibreOffice requirement for TOI PDF export.
+
+
+If a company has Info/Information plus Download, initial organization now proceeds
+normally. In Source overview, **Organize Download** starts an explicit incremental
+import; **Import log** only displays results. Existing files are never replaced.
+Select the parent company folder containing Download, rather than Download itself.

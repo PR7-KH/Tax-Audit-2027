@@ -263,6 +263,7 @@ class App(tk.Tk):
         Btn(self.toi_pdf_options, "Export TOI PDFs", self.export_toi_pdf).pack(side="left", padx=3)
         Btn(self.toi_pdf_options, "Open PDF folder", lambda: self.open_if(Path(self.folder.get())/"TOI_PDFs")).pack(side="left", padx=3)
         self.source_controls = tk.Frame(main, bg=BG)
+        Btn(self.source_controls, "Organize Download", self.organize_download, padx=8).pack(side="left", padx=3)
         Btn(self.source_controls, "Format summary", lambda: self.open_report("sources")).pack(side="left", padx=3)
         Btn(self.source_controls, "Validate files", lambda: self.open_report("check_tax")).pack(side="left", padx=3)
         Btn(self.source_controls, "Convert selected row", lambda: self.convert_target_pdfs(False), padx=8).pack(side="left", padx=3)
@@ -270,6 +271,13 @@ class App(tk.Tk):
         Btn(self.source_controls, "Open Excel", self.open_converted_excel, padx=8).pack(side="left", padx=3)
         Btn(self.source_controls, "Import log", lambda: self.open_report("import_results"), padx=6).pack(side="left", padx=2)
         Btn(self.source_controls, "Results", lambda: self.open_report("conversion_results"), padx=8).pack(side="left", padx=3)
+        actions = self.source_controls.winfo_children()
+        for widget in actions:
+            widget.pack_forget()
+        for index, widget in enumerate(actions):
+            widget.grid(row=index//4, column=index%4, sticky="ew", padx=2, pady=2)
+        for column in range(4):
+            self.source_controls.columnconfigure(column, weight=1)
         self.search_controls = tk.Frame(main, bg=BG)
         tk.Label(self.search_controls, text="Search all tax sheets", bg=BG, fg=TEXT).pack(side="left")
         self.search_query = tk.StringVar()
@@ -350,9 +358,15 @@ class App(tk.Tk):
             self.invalidate()
             self.run_bg(self.job_prepare_sources)
 
-    def job_prepare_sources(self):
-        report = organize_downloads(self.job_settings[0])
-        return ("prepared_sources",report)
+    def organize_download(self):
+        if self.busy or not self.need_folder():
+            return
+        self.invalidate()
+        self.run_bg(self.job_prepare_sources, True)
+
+    def job_prepare_sources(self, force=False):
+        report = organize_downloads(self.job_settings[0], allow_existing=force)
+        return ("prepared_sources",report,force)
 
     def need_folder(self):
         if not self.folder.get().strip() or not Path(self.folder.get()).is_dir():
@@ -713,7 +727,7 @@ class App(tk.Tk):
         if key == "import_results":
             self.set_picker([], "")
             self.draw(["Download source", "Destination", "Result"],self.import_results)
-            self.status("Only initial setup is automatic. Existing target folders are left unchanged.")
+            self.status("Organize Download starts an import; this log shows moved/skipped files. Existing files are never replaced.")
             return
         if key == "conversion_results":
             self.set_picker([], "")
@@ -893,9 +907,13 @@ class App(tk.Tk):
                 if kind == "prepared_sources":
                     self.import_results = msg[1]
                     moved = sum(r[2]=="MOVED" for r in msg[1])
-                    if msg[1]:
-                        self.conversion_note = f"Download setup: {moved} moved, {len(msg[1])-moved} left for review. See Import log."
-                    self.open_report("sources")
+                    file_rows = [r for r in msg[1] if not r[2].startswith("INFO:")]
+                    if file_rows:
+                        self.conversion_note = f"Download setup: {moved} moved, {len(file_rows)-moved} left for review. See Import log."
+                    elif msg[1]:
+                        self.conversion_note = msg[1][0][2]
+                    self.inventory = None
+                    self.open_report("import_results" if len(msg)>2 and msg[2] else "sources")
                 elif kind == "toi_pdfs_done":
                     self.draw(["TOI workbook", "Steps", "Result", "PDF file"],msg[1])
                     successful = sum(r[2]=="EXPORTED" for r in msg[1])

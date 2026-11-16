@@ -338,14 +338,20 @@ def classify_download(path):
     return target,year,''
 
 
-def organize_downloads(folder):
-    """First-selection setup only. Existing target folders disable this workflow."""
+def organize_downloads(folder, allow_existing=False):
+    """Automatic initial setup, or an explicit non-overwriting incremental import."""
     root=Path(folder).resolve()
-    if target_folders(root):
-        return []
     downloads=[p for p in root.iterdir() if p.is_dir() and p.name.casefold()=='download']
+    if not downloads:
+        note = ('Select the company folder containing Download, not Download itself.'
+                if root.name.casefold()=='download' else 'No Download child folder found in the selected company folder.')
+        return [['Download','','INFO: '+note]]
     if len(downloads)!=1 or not downloads[0].resolve().is_relative_to(root):
-        return []
+        return [['Download','','INFO: Download is ambiguous or points outside the company folder; no files moved.']]
+    operational = [directory.name for label,directory,_ in target_folders(root) if label not in ('Info','TOI')]
+    if operational and not allow_existing:
+        return [['Download','','INFO: Automatic setup skipped because target folders exist: '+', '.join(operational)+
+                 '. Click Organize Download to import remaining files without replacing existing files.']]
     download=downloads[0]
     reports=[]
     journal=root/'.tax-audit-imports.jsonl'
@@ -387,4 +393,4 @@ def organize_downloads(folder):
             if created and source.exists():
                 destination.unlink(missing_ok=True)
             reports.append([str(rel),str(destination.relative_to(root)),'ERROR: '+str(exc).splitlines()[0]])
-    return reports
+    return reports or [['Download','','INFO: Download contains no visible files.']]

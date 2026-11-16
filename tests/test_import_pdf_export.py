@@ -32,13 +32,13 @@ class DownloadSetupTests(unittest.TestCase):
             self.assertEqual((download/'unknown.xlsx').read_bytes(),b'keep')
             self.assertTrue((download/'Purchase_2025_2026.xlsx').exists())
             self.assertTrue((root/'.tax-audit-imports.jsonl').is_file())
-            self.assertEqual(organize_downloads(root),[])  # existing targets disable automatic setup
+            self.assertIn('Automatic setup skipped',organize_downloads(root)[0][2])
 
     def test_existing_targets_mean_no_changes(self):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);(root/'Bank').mkdir();(root/'Download').mkdir()
             source=root/'Download'/'Purchase_2025.xlsx';source.write_bytes(b'untouched')
-            self.assertEqual(organize_downloads(root),[])
+            self.assertIn('Automatic setup skipped',organize_downloads(root)[0][2])
             self.assertTrue(source.exists());self.assertFalse((root/'PR').exists())
 
     def test_collisions_ambiguity_and_missing_year_stay_in_download(self):
@@ -54,6 +54,38 @@ class DownloadSetupTests(unittest.TestCase):
             self.assertEqual((download/'b'/'Purchase_2025.xlsx').read_bytes(),b'b')
             self.assertTrue((download/'Sale.xlsx').exists())
             self.assertTrue((download/'Purchase_GL_2025.xlsx').exists())
+
+    def test_info_and_information_do_not_block_initial_setup(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            for name in ('Info','Information','TOI','Download'):(root/name).mkdir()
+            (root/'Info'/'keep.xlsx').write_bytes(b'existing info')
+            source=root/'Download'/'Purchase_01_2025.xlsx';source.write_bytes(b'purchase')
+            report=organize_downloads(root)
+            self.assertEqual(sum(r[2]=='MOVED' for r in report),1)
+            self.assertEqual((root/'PR'/'2025'/source.name).read_bytes(),b'purchase')
+            self.assertEqual((root/'Info'/'keep.xlsx').read_bytes(),b'existing info')
+
+    def test_explicit_import_handles_existing_targets_and_preserves_conflicts(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder);(root/'PR'/'2025').mkdir(parents=True);(root/'Download').mkdir()
+            name='Purchase_01_2025.xlsx'
+            (root/'PR'/'2025'/name).write_bytes(b'old')
+            (root/'Download'/name).write_bytes(b'new')
+            (root/'Download'/'Sale_2026.xlsx').write_bytes(b'sales')
+            report=organize_downloads(root,allow_existing=True)
+            self.assertTrue(any('destination already exists' in r[2] for r in report))
+            self.assertEqual((root/'PR'/'2025'/name).read_bytes(),b'old')
+            self.assertEqual((root/'Download'/name).read_bytes(),b'new')
+            self.assertEqual((root/'SR'/'2026'/'Sale_2026.xlsx').read_bytes(),b'sales')
+
+    def test_no_download_and_empty_download_explain_no_work(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            self.assertIn('No Download child',organize_downloads(root)[0][2])
+            (root/'Download').mkdir()
+            self.assertIn('no visible files',organize_downloads(root)[0][2])
+            self.assertIn('not Download itself',organize_downloads(root/'Download')[0][2])
 
     def test_explicit_financial_names(self):
         self.assertEqual(classify_download('purchase ledger.xlsx')[:2],('EXPENSE',None))

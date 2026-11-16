@@ -96,8 +96,9 @@ Nonselected sheets are hidden in a temporary copy. No uploaded VBA is executed.
 
 ## Automatic Download-folder setup
 
-Select the company folder containing a direct child named `Download`. If **any**
-recognized target folder already exists, automatic organization does nothing.
+Select the company folder containing a direct child named `Download`. Existing Info/TOI folders do not block initial organization. Existing operational
+tax/finance folders disable automatic organization; click Organize Download to
+explicitly import additional files without replacing existing files.
 Otherwise the app moves files with explicit names into newly needed folders:
 
 | Filename token | Destination |
@@ -122,8 +123,8 @@ not moved. Source bytes are verified before deletion; existing destinations are
 never overwritten. A hidden `.tax-audit-imports.jsonl` records planned/completed
 moves and hashes. Keep it for tracing or manually reversing an import. Move
 results remain visible until Refresh/company change; the journal remains on disk.
-New files added after target folders exist must be placed manually, matching the
-requested existing-folder behavior. This setup does not infer a file's format
+For new files added after target folders exist, use Organize Download. Import log
+only displays results; it does not start a transfer. This setup does not infer a file's format
 or business correctness from its name; normal validation still applies afterward.
 
 36 regression tests passed, including real LibreOffice PDF rendering/content,
@@ -131,3 +132,22 @@ orientation and source/output preservation, Download mappings, ambiguity,
 conflicts and existing-target no-op behavior. A live Linux Tk check passed folder
 selection/organization, Import log, independent TOI preview, real PDF export,
 return to preview and Tax Paid Summary after a partial TOI build.
+
+
+## Fix for Info + Information + Download layouts
+
+The previous guard treated Info alone as a complete existing target setup and
+silently skipped organization. Info and TOI no longer block automatic setup;
+Information remains an unrelated folder and is untouched. Select the parent
+company folder, not Download itself. Missing/empty Download and automatic-skip
+conditions now appear explicitly in the log.
+
+Source overview has an **Organize Download** button. Use it to run an incremental
+import even when PR/SR or finance folders already exist. Existing destination
+files are preserved; conflicting or unrecognized inputs remain in Download.
+Explicit imports show their per-file results automatically. The source actions
+wrap into two rows so the button remains visible.
+
+Validated with seven organizer tests, eight preview regressions, and a live Tk
+check reproducing the screenshot's folder arrangement, automatic PR creation,
+explicit SR import, visible conflict messages and preservation of existing Info.
