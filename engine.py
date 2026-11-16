@@ -261,9 +261,10 @@ def build_mtr_detail(wb, root, log):
                 fname = str(src.cell(r, 1).value)
                 ws.cell(out, 1, k)
                 cell = ws.cell(out, 2, fname)
-                path = root / tax / y / fname
-                if y != "Unknown" and path.exists():
-                    cell.hyperlink = str(path)
+                tax_folder = find_dir(root,tax)
+                path = tax_folder / y / fname if tax_folder else root / tax / y / fname
+                if y != "Unknown" and path.is_file():
+                    cell.hyperlink = path.resolve().as_uri()
                 for c in range(n):
                     ws.cell(out, 3 + c, src.cell(r, s + c).value)
                 out += 1

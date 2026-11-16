@@ -2,6 +2,7 @@
 from copy import copy
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
+import hashlib
 import re
 import shutil
 import subprocess
@@ -172,6 +173,41 @@ def prepare_workbook(source, output, start, end):
     return [ws.title for ws in selected]
 
 
+@contextmanager
+def export_workspace(destination,source,backend):
+    """Stable Mac work paths retain Excel grants; other platforms use temporary copies."""
+    if backend!='excel' or sys.platform!='darwin':
+        with tempfile.TemporaryDirectory(prefix='toi-pdf-') as temp:
+            temp=Path(temp);out=temp/'pdf';out.mkdir()
+            yield temp/'prepared.xlsx',out/'prepared.pdf',temp
+        return
+    import fcntl
+    directory=destination/'.excel-work'
+    marker=directory/'.tax-audit-owner'
+    existed=directory.exists()
+    directory.mkdir(exist_ok=True)
+    owner='Tax Audit TOI PDF workspace v1'
+    if not existed:
+        with marker.open('x',encoding='utf-8') as stream:
+            stream.write(owner)
+    if not marker.is_file() or marker.read_text(encoding='utf-8')!=owner:
+        raise RuntimeError('Existing .excel-work folder is not a recognized app workspace; preserve it and rename it before retrying.')
+    with (directory/'.export.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError('Another TOI export is using this PDF work folder. Retry after it finishes.') from exc
+        try:
+            key=hashlib.sha256(source.name.encode('utf-8')).hexdigest()
+            prepared=directory/(key+'.xlsx')
+            # The PDF folder is stable and visible when Excel asks for folder access.
+            pdf=destination/('.working-'+key+'.pdf')
+            pdf.unlink(missing_ok=True)
+            yield prepared,pdf,None
+        finally:
+            fcntl.flock(lock,fcntl.LOCK_UN)
+
+
 def export_toi_pdfs(company_folder, step_range='1-17', progress=None, renderer='auto'):
     start,end=parse_steps(step_range)
     root=Path(company_folder)
@@ -188,16 +224,14 @@ def export_toi_pdfs(company_folder, step_range='1-17', progress=None, renderer='
     with (excel_application() if backend=='excel' else nullcontext(None)) as app:
         for index,source in enumerate(files,1):
             try:
-                with tempfile.TemporaryDirectory(prefix='toi-pdf-') as temp:
-                    temp=Path(temp);prepared=temp/'prepared.xlsx';out=temp/'pdf';out.mkdir()
+                with export_workspace(destination,source,backend) as (prepared,pdf,temp):
                     selected=prepare_workbook(source,prepared,start,end)
-                    pdf=out/'prepared.pdf'
                     if backend=='excel':
                         render_excel(app,prepared,pdf,selected)
                     else:
                         profile=(temp/'profile').as_uri()
                         command=[soffice,'-env:UserInstallation='+profile,'--headless','--convert-to','pdf:calc_pdf_Export',
-                                 '--outdir',str(out),str(prepared)]
+                                 '--outdir',str(pdf.parent),str(prepared)]
                         completed=subprocess.run(command,capture_output=True,text=True,timeout=180,check=False)
                         if completed.returncode:
                             raise RuntimeError('LibreOffice export failed: '+(completed.stderr or completed.stdout).strip()[:500])

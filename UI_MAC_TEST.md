@@ -2,24 +2,28 @@
 
 ## Install this update
 
-Back up the working app folder. Unzip the update bundle and copy **all eight
+Back up the working app folder. Unzip the update bundle and copy **all nine
 files** into that folder, replacing matching files. Keep templates, company data,
 other Python modules and source workbooks in place.
 
 - **Mac:** in Terminal in the app folder, run `bash Install_Update_Mac.command`.
   Then use your existing Start_Control_Center_Mac.command launcher.
-- **Windows:** run Install_Update_Windows.bat once, then launch with
-  Start_Control_Center_Windows.bat.
+- **Windows:** install **Python 3.12 x64 / x86-64** from python.org/downloads/windows/
+  if it is not already installed. Then run Start_Control_Center_Windows.bat;
+  it invokes setup automatically when needed. Install_Update_Windows.bat can
+  also be run directly. Do not choose the ARM64 Python installer for this profile.
 
-Python 3.10+ is required. Each computer needs its own virtual environment. Setup
+Mac uses Python 3.10+ and .venv. Windows uses Python 3.12 x64 and a separate
+.venv-win, including on Windows ARM using x64 emulation. Setup
 installs the Python Excel bridge (xlwings) and its platform dependencies. No Excel
 PDF add-in, xlwings add-in or PRO subscription is required for this feature.
 Desktop Microsoft Excel must already be installed and activated for Excel export.
 
 ## TOI filenames and Download organization
 
-Names such as `L001-100121101_TOI25.xlsx`, `TOI26.xlsx`, `TOI2025.xlsx`, and
-`TOI_2026.xlsx` now match the TOI folder. TOI workbooks go directly into TOI,
+Names such as `L001-100121101_TOI25.xlsx`, `TOI2X.xlsx`, `TOI30.xlsx`,
+`TOI2025.xlsx`, and `TOI_2026.xlsx` match the TOI folder. Future numeric and
+alphanumeric year suffixes following TOI are accepted. TOI workbooks go directly into TOI,
 without a year subfolder. Unrelated names containing letters such as STOIC do
 not match accidentally.
 
@@ -54,7 +58,7 @@ Information and other company files remain intact.
 The uploaded VBA Module10 calls `ExportAsFixedFormat`, which is Excel's own PDF
 exporter. It does not use a separate PDF plugin. The app now defaults to
 **Microsoft Excel** on Mac and Windows, using a separate Excel instance and
-temporary workbook copies. LibreOffice remains an explicit alternative; an Excel
+workbook copies. LibreOffice remains an explicit alternative; an Excel
 failure does not silently switch to LibreOffice, which can render fonts differently.
 
 1. Open TOIs Overview → Export TOI PDF.
@@ -66,9 +70,22 @@ failure does not silently switch to LibreOffice, which can render fonts differen
 On the first Mac export, allow the launching app (Terminal/Python/your launcher)
 to control Microsoft Excel if macOS asks. If denied, change System Settings →
 Privacy & Security → Automation. Launch Excel once beforehand to complete its
-normal activation/setup. This feature opens only temporary copies and closes its
+normal activation/setup. This feature opens only work copies and closes its
 own Excel instance. It never saves back to original workbooks. Existing PDFs
 receive numbered successors rather than being overwritten.
+
+Mac Excel's **Grant Access** file/folder dialogs are separate from macOS Automation
+permission. Earlier exports used a new temporary folder each time, which could
+cause repeated grants. Mac Excel now reuses prepared workbook paths under
+`TOI_PDFs/.excel-work` and the same staging-PDF directory under TOI_PDFs. Work
+copies are retained between exports so their file identity stays stable. They
+contain company data just like the exported PDFs; keep this app-owned work folder
+with the company directory. Original workbooks remain unchanged.
+
+Approve the initial Excel access request for the work file and TOI_PDFs folder
+when offered. The app cannot bypass sandbox permissions or guarantee Excel never
+asks again. It does not display its own input/output file-selection dialogs.
+Windows Excel and LibreOffice continue to use temporary work copies.
 
 Module10 row heights, A–D widths, A4 orientation, print areas, centering, margins
 and per-step page limits are retained. Excel additionally performs native E–I
@@ -117,18 +134,47 @@ formulas. MTR summary remains under MTR Overview. Tax Paid Summary uses all
 
 ## Validation performed and what needs your test
 
-46 regression tests have passed, including actual LibreOffice PDF rendering,
+55 regression tests have passed, including actual LibreOffice PDF rendering,
 TOI25 routing, source/output preservation, font/text/formula preservation, Excel
-backend choice, temporary-copy handling, native API cleanup/COM initialization,
+backend choice, stable Mac work-file identity/locks, source hyperlink opening,
+Windows runtime rejection of unsupported ARM64/3.15, native API cleanup/COM initialization,
 existing totals, chronological years and import conflicts. A live Linux Tk test
-passed TOI25 import, workbook-font display and renderer routing/status.
+passed TOI25 import, workbook-font display, renderer routing/status and clickable
+MTR file names.
 
 **Native Microsoft Excel was mocked in these tests:** cloud has no Mac/Windows
 Excel. Real Excel automation, Windows batch launchers, macOS Automation permission
 and Khmer shaping require your native test. Dependency wheels were downloaded for
-Python 3.10 on Apple Silicon Mac and Windows x64, but that is not proof of native
-execution. Run `python -m unittest discover -s tests -v` for the suite; the real
+Python 3.10 on Apple Silicon Mac and the complete Python 3.12 Windows x64
+profile, but that is not proof of native execution or Mac permission caching. Run `python -m unittest discover -s tests -v` for the suite; the real
 LibreOffice test skips when LibreOffice is absent.
 
 To roll back, restore all application files from your backup or Git history.
 Your company workbooks and templates are unchanged by this update.
+
+
+## Windows installation log diagnosis
+
+The reported error is CPython 3.15 ARM64 attempting to compile cryptography and
+failing because link.exe/MSVC is missing. Setup now selects a supported Python
+3.12 x64 runtime and installs prebuilt wheels only. It does not install Rust,
+Visual Studio or build dependencies. If this runtime is missing, it reports the
+exact required installer rather than attempting compilation. Existing incompatible
+.venv-win folders are backed up before rebuilding. The shared Mac .venv is not
+changed, which matters when the project is shared between Mac and Windows.
+
+## Open MTR sources
+
+In MTR_PR, MTR_SR, MTR_TOS or MTR_WHT, **click the file name in column B** to open
+its original Excel workbook. Linked rows are blue and the filename has a hand
+cursor. This works on cached/paged previews. The Excel export also retains file
+hyperlinks, using absolute file URIs with spaces/Unicode encoded and the actual
+source folder's casing. A missing source produces a status message; data/totals
+are not changed.
+
+## What the import controls do
+
+**Organize Download** starts a file transfer into the appropriate source folders.
+**Import log** only displays the latest moved/skipped/error results. Clicking the
+log does not run another transfer. The on-disk .tax-audit-imports.jsonl remains the
+persistent transfer record.

@@ -10,6 +10,8 @@ import sys
 import threading
 import tkinter as tk
 from pathlib import Path
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 from tkinter import filedialog, messagebox, ttk
 
 HERE = Path(__file__).resolve().parent
@@ -93,6 +95,25 @@ def report_row_tag(values, index, numbered=False):
     return "odd" if index % 2 else "even"
 
 
+
+
+def mtr_source_path(wb,sheet,row):
+    if not sheet or not sheet.startswith('MTR_') or sheet not in wb:
+        return None
+    link=wb[sheet].cell(row,2).hyperlink
+    if link is None or not link.target:
+        return None
+    target=link.target
+    parsed=urlsplit(target)
+    if parsed.scheme.casefold()=='file':
+        path=url2pathname(parsed.path)
+        if parsed.netloc and parsed.netloc.casefold()!='localhost':
+            path='//'+parsed.netloc+path
+        return Path(path)
+    # Accept legacy plain local paths, including Windows drive letters.
+    if not parsed.scheme or (len(parsed.scheme)==1 and len(target)>2 and target[1]==':'):
+        return Path(target)
+    return None
 
 
 class Btn(tk.Label):
@@ -318,6 +339,7 @@ class App(tk.Tk):
         for tag, options in {
             "even": {"background": "#ffffff"},
             "odd": {"background": "#f2f6fa"},
+            "source_link": {"foreground": "#126fa3"},
             "section": {"background": "#dce9f3", "foreground": NAVY},
             "total": {"background": "#d9eee7", "foreground": "#12533f"},
             "warning": {"background": "#fff1dc", "foreground": "#854c0a"},
@@ -332,6 +354,8 @@ class App(tk.Tk):
         self.tree.pack(fill="both", expand=True)
         self.tree.bind("<Configure>", self.resize_preview)
         self.tree.bind("<Double-1>", self.pdf_row_action)
+        self.tree.bind("<ButtonRelease-1>", self.open_mtr_source)
+        self.tree.bind("<Motion>", self.mtr_link_cursor)
         self.status_lbl = tk.Label(main, text="", bg=BG, fg=MUTED, anchor="w", font=(FONT, 10))
         self.status_lbl.pack(fill="x")
 
@@ -507,6 +531,8 @@ class App(tk.Tk):
             tag = report_row_tag(values, r-1)
             if tag in ("even", "odd") and any(cell.value is not None and cell.font.bold for cell in cells):
                 tag = "section"
+            if name.startswith("MTR_") and len(cells)>1 and cells[1].hyperlink:
+                tag="source_link"
             rows.append([r] + values)
             tags.append(tag)
         return ("page", name, page, ncols, total, rows, tags)
@@ -526,7 +552,8 @@ class App(tk.Tk):
                     self.tree.focus(item)
                     self.tree.see(item)
                     break
-        self.status(f"{name}: rows {page*self.page_size+1:,}–{min(total,(page+1)*self.page_size):,} of {total:,}. All rows available using Next / Previous.")
+        hint=" Click a file name in column B to open its source workbook." if name.startswith("MTR_") else ""
+        self.status(f"{name}: rows {page*self.page_size+1:,}–{min(total,(page+1)*self.page_size):,} of {total:,}. All rows available using Next / Previous."+hint)
 
     def set_picker(self, names, active):
         for w in self.picker.winfo_children():
@@ -553,6 +580,7 @@ class App(tk.Tk):
                       ["Use 1-17 for all steps, or a range such as 4-4."],
                       ["Microsoft Excel is recommended for Khmer, matching the original VBA renderer."],
                       ["Install matching workbook fonts (for example Khmer OS Siemreap); LibreOffice is an alternative."],
+                      ["On Mac, grant Excel access to TOI_PDFs when requested; stable work paths reduce repeat requests."],
                       ["Source workbooks and existing PDFs are preserved."]])
             return
         self.current["sheet"] = name
@@ -606,6 +634,36 @@ class App(tk.Tk):
             self.partial_build = True
             self.page_cache.clear();self.sheet_pages.clear();self.sheet_dimensions.clear()
         return ("sheets","tois",dict.fromkeys(["TOI","FULL TOI","Export TOI PDF"]))
+
+    def mtr_link_at(self,event):
+        if self.busy or not self.built or not self.current:
+            return None
+        sheet=self.current.get("sheet")
+        if not sheet or not sheet.startswith("MTR_") or self.tree.identify_column(event.x)!="#3":
+            return None
+        item=self.tree.identify_row(event.y)
+        values=self.tree.item(item,"values") if item else ()
+        if not values:
+            return None
+        try:
+            return mtr_source_path(self.built[1],sheet,int(values[0]))
+        except (ValueError,TypeError):
+            return None
+
+    def mtr_link_cursor(self,event):
+        self.tree.configure(cursor="hand2" if self.mtr_link_at(event) else "")
+
+    def open_mtr_source(self,event):
+        path=self.mtr_link_at(event)
+        if path is None:
+            return
+        if not path.is_file():
+            self.status("Source workbook no longer exists: "+str(path))
+            return
+        try:
+            open_path(path)
+        except OSError as exc:
+            self.status("Could not open source workbook: "+str(exc))
 
     def pdf_row_action(self, event):
         if self.current and self.current.get("key") in ("check_tax", "conversion_results"):

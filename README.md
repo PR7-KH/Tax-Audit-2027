@@ -1,6 +1,6 @@
 # Tax Audit Engine (Python port of V5.1)
 
-Run (Mac or Windows, Python 3.10+; `pip install -r requirements.txt` once):
+Run (Mac: Python 3.10+; Windows: use the Python 3.12 x64 setup below):
 
     python3 engine.py "<company folder>" "<output>.xlsx"
     python3 engine.py "<company folder>" "<output>.xlsx" --months 3 --link-all
@@ -40,8 +40,8 @@ PDF extraction does not automatically validate tax layouts or bank balances.
 Unzip it and copy all files inside `Tax-Audit-Mac-Update` into your existing
 app folder, replacing matching files. Keep your templates and company data.
 On Mac, run `bash Install_Update_Mac.command` in Terminal in the app folder,
-then launch normally. On Windows, run Install_Update_Windows.bat and then
-Start_Control_Center_Windows.bat. Back up your working folder first.
+then launch normally. On Windows, install Python 3.12 x64 and run
+Start_Control_Center_Windows.bat; setup runs automatically when needed. Back up your working folder first.
 
 For future updates, rebuild the ZIP with `python3 scripts/package_mac_update.py`
 after changing any of the bundled files, and commit the refreshed ZIP alongside
@@ -54,7 +54,7 @@ in `.tax-audit-conversions.json`; use **Results → Open Excel** to inspect them
 The overview refreshes automatically and distinguishes conversion completion from
 reviewed/import-ready financial data. See UI_MAC_TEST.md for the full workflow.
 
-The update bundle includes `toi_pdf.py` and Mac/Windows setup helpers (eight files total). Selecting a new
+The update bundle includes `toi_pdf.py` and Mac/Windows setup helpers (nine files total). Selecting a new
 company folder with no recognized target folders automatically organizes explicit
 filenames from its Download child. See UI_MAC_TEST.md for routing rules and the
 Microsoft Excel setup and Khmer font guidance for TOI PDF export.
@@ -66,8 +66,15 @@ import; **Import log** only displays results. Existing files are never replaced.
 Select the parent company folder containing Download, rather than Download itself.
 
 
-TOI filenames with year suffixes (`TOI25`, `TOI26`, `TOI2025`) now route to TOI.
+TOI filenames with year suffixes (`TOI25`, `TOI2X`, `TOI30`, `TOI2025`) now route to TOI.
 For Khmer PDF export, choose Microsoft Excel, which uses the same PDF engine as
 the old VBA system. Workbook fonts lists source font references; install matching
 fonts such as Khmer OS Siemreap and restart Excel. Native Excel still needs your
 Mac/Windows test; it is not available in the cloud test machine.
+
+
+Windows setup uses a separate .venv-win and prebuilt wheels. The uploaded Python
+3.15 ARM64 error was a cryptography compiler failure; use Python 3.12 x64 rather
+than installing compiler tools. Mac Excel uses stable work copies under TOI_PDFs
+to reduce repeated Grant Access prompts; initial OS/Excel approval may still be
+needed. MTR preview file names (column B) now open their source workbooks.

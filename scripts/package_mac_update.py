@@ -12,6 +12,7 @@ FILES = (
     'Install_Update_Mac.command',
     'Install_Update_Windows.bat',
     'Start_Control_Center_Windows.bat',
+    'setup_windows.py',
 )
 OUTPUT = ROOT / 'downloads' / 'Tax-Audit-Mac-Update.zip'
 
