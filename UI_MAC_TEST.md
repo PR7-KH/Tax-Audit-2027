@@ -1,9 +1,9 @@
-# Desktop update: Excel PDF export and TOI filenames
+# Desktop update: Audit Tools, session reset and PDF export
 
 ## Install this update
 
-Back up the working app folder. Unzip the update bundle and copy **all nine
-files** into that folder, replacing matching files. Keep templates, company data,
+Back up the working app folder. Unzip the update bundle and copy **all twelve
+files, including the assets folder**, into that folder, replacing matching files. Keep templates, company data,
 other Python modules and source workbooks in place.
 
 - **Mac:** in Terminal in the app folder, run `bash Install_Update_Mac.command`.
@@ -18,6 +18,9 @@ Mac uses Python 3.10+ and .venv. Windows uses Python 3.12 x64 and a separate
 installs the Python Excel bridge (xlwings) and its platform dependencies. No Excel
 PDF add-in, xlwings add-in or PRO subscription is required for this feature.
 Desktop Microsoft Excel must already be installed and activated for Excel export.
+The new Audit Tools modules require **python-docx**; rerun the Mac installer even
+if the previous version already worked. The Windows launcher checks for this
+dependency and runs setup if it is missing.
 
 ## TOI filenames and Download organization
 
@@ -64,8 +67,9 @@ failure does not silently switch to LibreOffice, which can render fonts differen
 1. Open TOIs Overview → Export TOI PDF.
 2. Select Microsoft Excel in the renderer dropdown.
 3. Enter `1-17` for all steps or a range such as `4-4`.
-4. Click Export TOI PDFs. All .xlsx files directly in TOI are processed.
-5. Inspect per-file results; PDFs are saved in TOI_PDFs.
+4. Choose **Save in TOI_PDFs** (default) or **TOI** (beside the source workbooks).
+5. Click Export TOI PDFs. All .xlsx files directly in TOI are processed;
+   inspect per-file results.
 
 On the first Mac export, allow the launching app (Terminal/Python/your launcher)
 to control Microsoft Excel if macOS asks. If denied, change System Settings →
@@ -77,15 +81,22 @@ receive numbered successors rather than being overwritten.
 Mac Excel's **Grant Access** file/folder dialogs are separate from macOS Automation
 permission. Earlier exports used a new temporary folder each time, which could
 cause repeated grants. Mac Excel now reuses prepared workbook paths under
-`TOI_PDFs/.excel-work` and the same staging-PDF directory under TOI_PDFs. Work
+`<chosen output folder>/.excel-work` and the same staging-PDF directory there. Work
 copies are retained between exports so their file identity stays stable. They
 contain company data just like the exported PDFs; keep this app-owned work folder
 with the company directory. Original workbooks remain unchanged.
 
-Approve the initial Excel access request for the work file and TOI_PDFs folder
+Approve Excel's access request for the work file and chosen output folder
 when offered. The app cannot bypass sandbox permissions or guarantee Excel never
 asks again. It does not display its own input/output file-selection dialogs.
 Windows Excel and LibreOffice continue to use temporary work copies.
+
+Choosing TOI may reduce the number of distinct folders Excel needs, but opening
+an original workbook directly would lose the prepared print layout and source
+protection. Export therefore continues to use stable work copies. Excel may
+still ask for both file and folder access on subsequent runs. When PDFs are
+saved in TOI, `.tax-audit-toi-exports.json` identifies generated outputs so source
+validation does not treat them as raw PDFs needing conversion; keep that file.
 
 Module10 row heights, A–D widths, A4 orientation, print areas, centering, margins
 and per-step page limits are retained. Excel additionally performs native E–I
@@ -134,13 +145,17 @@ formulas. MTR summary remains under MTR Overview. Tax Paid Summary uses all
 
 ## Validation performed and what needs your test
 
-55 regression tests have passed, including actual LibreOffice PDF rendering,
+63 regression tests have passed, including actual LibreOffice PDF rendering,
 TOI25 routing, source/output preservation, font/text/formula preservation, Excel
 backend choice, stable Mac work-file identity/locks, source hyperlink opening,
 Windows runtime rejection of unsupported ARM64/3.15, native API cleanup/COM initialization,
 existing totals, chronological years and import conflicts. A live Linux Tk test
 passed TOI25 import, workbook-font display, renderer routing/status and clickable
-MTR file names.
+MTR file names. New checks cover Module11 company/item mappings, original-template
+preservation, Word field substitution and versioning, generated-output exclusion,
+TOI-folder output tracking, build notification routing and deferred reset. A live
+Linux Tk check also passed both Audit Tools tabs, document saves, company
+auto-fill, build notification invocation and reset of previews/forms/undo history.
 
 **Native Microsoft Excel was mocked in these tests:** cloud has no Mac/Windows
 Excel. Real Excel automation, Windows batch launchers, macOS Automation permission
@@ -151,6 +166,53 @@ LibreOffice test skips when LibreOffice is absent.
 
 To roll back, restore all application files from your backup or Git history.
 Your company workbooks and templates are unchanged by this update.
+
+## Audit Tools: Document Request
+
+Open **Audit Tools** below Tax Paid Summary, then **Document Request**.
+Put the original **Template.xlsx** in the selected company's **Info** folder.
+As in VBA Module11, Sheet1 provides the report layout and Sheet2 provides choices
+starting at A7 and ending at the first blank cell (up to row 1000). Keep the
+company Info workbook as a separate Excel file in Info with Sheet1.
+
+Select up to **17** items. **Create / Open Excel** fills company details in
+A6:B10 using Info rows 1, 2, 5, 6, 3, and puts the selected requests in A14:A30.
+It hides unused rows 16–30 and preserves the template's page setup.
+**Preview / Print PDF** renders a PDF using the renderer selected in TOIs Overview
+(Microsoft Excel on Mac/Windows by default), then opens it for review/printing.
+Use the viewer's Print command. Source templates are never overwritten.
+Excel and PDF results are saved under **company/Audit_Tools** with numbered
+versions. The Excel report remains available if PDF rendering fails.
+
+## Audit Tools: Meeting Notes
+
+The **Meeting Notes** tab starts with the selected company's Info details and
+today's Cambodia date. Edit those details and enter attendees, reference, agenda,
+discussion, requested documents, decisions and closing text. **Save Word** creates
+**company/Audit_Tools/Meeting_Note.docx**; later saves create numbered versions.
+**Open Word / Print** opens the latest saved document in your default Word app.
+It opens the saved version, so save again after further edits.
+
+The bundled template is derived from the uploaded meeting-note layout, retaining
+its official heading, logo and signature areas. Previous company/case names,
+references, dates and findings have been removed. The form does not reuse that
+case's facts. The template references **Khmer MEF1 / Khmer MEF2** fonts; install
+the matching fonts for the original appearance. Check the resulting pagination,
+Khmer shaping and signature positions in Microsoft Word before printing. Cloud
+checks confirm editable text and structural preservation, not native Word layout.
+
+## Build notification and Refresh
+
+A successful **Build all data** plays a short system notification: Glass on Mac,
+the Windows notification sound, or a Tk bell elsewhere. Playback follows system
+volume/settings; native playback still needs your test. Failed builds do not
+play the completion sound.
+
+**Refresh** now returns the interface to startup: company selection, built data,
+previews, search, report selection, zoom and unsaved meeting edits are cleared.
+Save Word before refreshing. Saved outputs and source files remain on disk.
+If a task is running, Refresh waits for it to finish safely, then clears the
+session and discards its UI result. It does not interrupt a file write/export.
 
 
 ## Windows installation log diagnosis

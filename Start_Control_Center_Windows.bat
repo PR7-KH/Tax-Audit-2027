@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 if not exist "%~dp0.venv-win\Scripts\python.exe" goto setup
-"%~dp0.venv-win\Scripts\python.exe" -c "import sys,sysconfig; assert sys.version_info[:2]==(3,12) and sysconfig.get_platform()=='win-amd64'; import tkinter,openpyxl,xlsxwriter,pdfplumber,xlwings" >nul 2>&1
+"%~dp0.venv-win\Scripts\python.exe" -c "import sys,sysconfig; assert sys.version_info[:2]==(3,12) and sysconfig.get_platform()=='win-amd64'; import tkinter,openpyxl,xlsxwriter,pdfplumber,xlwings,docx" >nul 2>&1
 if errorlevel 1 goto setup
 goto run
 :setup

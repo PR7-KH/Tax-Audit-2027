@@ -43,7 +43,8 @@ def ci_sheet(wb, name):
 
 
 def first_xlsx(folder):
-    files = sorted(p for p in folder.glob("*.xlsx") if not p.name.startswith("~$"))
+    files = sorted(p for p in folder.glob("*.xlsx") if not p.name.startswith((".","~$"))
+                   and not (folder.name.casefold()=="info" and p.name.casefold()=="template.xlsx"))
     return files[0] if files else None
 
 
@@ -645,7 +646,7 @@ def build_workbook(company_folder, months_prior=3, link_all=False):
     tmp = tdir / "consolidated.xlsx"
     original_hidden = cons.hidden
     # Finance folders (GL, Bank, ...) are not tax data: keep them out of the tax consolidation.
-    cons.hidden = lambda p: original_hidden(p) or (p.parent == root and p.name.upper() in FINANCE_NAMES)
+    cons.hidden = lambda p: original_hidden(p) or (p.parent == root and p.name.upper() in (FINANCE_NAMES | {"AUDIT_TOOLS","TOI_PDFS"}))
     try:
         with open(tdir / "consolidated.log", "w", encoding="utf-8") as lf:
             cons.consolidate(root, tmp, lf, excel_job=True)

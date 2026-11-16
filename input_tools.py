@@ -9,6 +9,7 @@ import os
 import tempfile
 from openpyxl import Workbook, load_workbook
 import engine
+from toi_pdf import is_toi_output
 
 
 def visible_files(directory):
@@ -32,7 +33,8 @@ def target_folders(folder):
 
 def target_files(folder):
     return sorted({p for _, directory, _ in target_folders(folder) for p in visible_files(directory)
-                   if p.resolve().is_relative_to(Path(folder).resolve())})
+                   if p.resolve().is_relative_to(Path(folder).resolve())
+                   and not (p.parent.name.casefold()=='toi' and is_toi_output(p))})
 
 
 def file_hash(path):
@@ -122,7 +124,7 @@ def source_inventory(folder):
             rows.append([tax, '—', 0, 'Missing' if directory is None else 'Empty', '—'])
     for name in ('TOI', 'Info'):
         directory = engine.find_dir(root, name)
-        files = visible_files(directory)
+        files = [p for p in visible_files(directory) if not (name=='TOI' and is_toi_output(p))]
         rows.append([name, 'All', len(files), folder_status(root, files, records, tax=True), format_counts(files)])
     for key, (label, _) in engine.FINANCE_FOLDERS.items():
         files = visible_files(engine.finance_folder(root, key))

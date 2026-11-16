@@ -3,6 +3,8 @@ from copy import copy
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 import hashlib
+import json
+import os
 import re
 import shutil
 import subprocess
@@ -86,11 +88,11 @@ def excel_application():
                 com.CoUninitialize()
 
 
-def render_excel(app, prepared, pdf, selected):
+def render_excel(app, prepared, pdf, selected, autofit=True):
     book=None
     try:
         book=app.books.open(str(prepared),update_links=False,read_only=True)
-        for name in selected:
+        for name in (selected if autofit else []):
             try:
                 book.sheets[name].range('E:I').columns.autofit()
             except Exception:
@@ -208,7 +210,34 @@ def export_workspace(destination,source,backend):
             fcntl.flock(lock,fcntl.LOCK_UN)
 
 
-def export_toi_pdfs(company_folder, step_range='1-17', progress=None, renderer='auto'):
+def is_toi_output(path):
+    path=Path(path)
+    if path.suffix.lower()!='.pdf':return False
+    try:
+        data=json.loads((path.parent/'.tax-audit-toi-exports.json').read_text(encoding='utf-8'))
+        return data.get('version')==1 and path.name in data.get('files',[])
+    except (OSError,ValueError,AttributeError):return False
+
+
+def record_toi_output(path):
+    manifest=path.parent/'.tax-audit-toi-exports.json'
+    names=[]
+    if manifest.exists():
+        data=json.loads(manifest.read_text(encoding='utf-8'))
+        if data.get('version')!=1 or not isinstance(data.get('files'),list):
+            raise ValueError('Unrecognized TOI PDF output history; preserve it before retrying.')
+        names=data['files']
+    staged=None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=path.parent,prefix='.toi-exports-',delete=False) as stream:
+            staged=Path(stream.name)
+            json.dump({'version':1,'files':sorted(set(names+[path.name]))},stream)
+        os.replace(staged,manifest)
+    finally:
+        if staged:staged.unlink(missing_ok=True)
+
+
+def export_toi_pdfs(company_folder, step_range='1-17', progress=None, renderer='auto', output_folder='TOI_PDFs'):
     start,end=parse_steps(step_range)
     root=Path(company_folder)
     toi=next((p for p in root.iterdir() if p.is_dir() and p.name.casefold()=='toi'),None)
@@ -219,7 +248,9 @@ def export_toi_pdfs(company_folder, step_range='1-17', progress=None, renderer='
         raise ValueError('No .xlsx workbooks found directly inside TOI.')
     backend=select_renderer(renderer)
     soffice=find_soffice() if backend=='libreoffice' else None
-    destination=root/'TOI_PDFs';destination.mkdir(exist_ok=True)
+    if output_folder not in ('TOI_PDFs','TOI'):raise ValueError('Choose TOI_PDFs or TOI for PDF output.')
+    destination=toi if output_folder=='TOI' else root/'TOI_PDFs'
+    destination.mkdir(exist_ok=True)
     results=[]
     with (excel_application() if backend=='excel' else nullcontext(None)) as app:
         for index,source in enumerate(files,1):
@@ -251,6 +282,7 @@ def export_toi_pdfs(company_folder, step_range='1-17', progress=None, renderer='
                             break
                         except FileExistsError:
                             target=destination/f'{base}_{version}.pdf';version+=1
+                    if output_folder=='TOI':record_toi_output(target)
                     results.append([source.name,', '.join(selected),'EXPORTED',str(target)])
             except Exception as exc:
                 results.append([source.name,f'{start}-{end}','ERROR: '+str(exc).splitlines()[0],''])

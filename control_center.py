@@ -10,6 +10,7 @@ import sys
 import threading
 import tkinter as tk
 from pathlib import Path
+import subprocess as _sound_subprocess
 from urllib.parse import urlsplit
 from urllib.request import url2pathname
 from tkinter import filedialog, messagebox, ttk
@@ -21,6 +22,7 @@ import engine  # noqa: E402
 from input_tools import (source_inventory, validate_sources, convert_pdf, selected_pdfs,
                          batch_convert_pdfs, conversion_records, converted_output, target_files, view_pdfs, organize_downloads)
 from toi_pdf import export_toi_pdfs, parse_steps, toi_workbook_fonts
+from audit_tools_ui import AuditToolsPanel
 
 NAVY, SIDE, SIDE_HOVER, ACCENT = "#101f35", "#14263f", "#203a58", "#087f8c"
 GREEN, BG, CARD, TEXT, MUTED = "#167459", "#f0f4f8", "#ffffff", "#172b43", "#61748b"
@@ -36,6 +38,7 @@ MENU = [
     ("item", "mtr", "MTR Overview"),
     ("item", "consolidate", "Consolidated data"),
     ("item", "tps", "Tax Paid Summary"),
+    ("item", "audit_tools", "Audit Tools"),
     ("group", "", "FINANCIAL AUDIT"),
     ("item", "check_fin", "Check source folders"),
     ("item", "fin_SALES", "Sales"),
@@ -151,6 +154,8 @@ class App(tk.Tk):
         self.last_export = None
         self.menu_labels = {}
         self.busy = False
+        self.reset_pending = False
+        self.audit_panel = None
         self.page_cache = OrderedDict()
         self.sheet_pages = {}
         self.sheet_dimensions = {}
@@ -286,7 +291,10 @@ class App(tk.Tk):
                      values=("Microsoft Excel","LibreOffice"),state="readonly",width=16).pack(side="left",padx=4)
         Btn(self.toi_pdf_options, "Workbook fonts", self.font_help, padx=8).pack(side="left",padx=3)
         Btn(self.toi_pdf_options, "Export TOI PDFs", self.export_toi_pdf).pack(side="left", padx=3)
-        Btn(self.toi_pdf_options, "Open PDF folder", lambda: self.open_if(Path(self.folder.get())/"TOI_PDFs")).pack(side="left", padx=3)
+        self.toi_output=tk.StringVar(value="TOI_PDFs")
+        ttk.Label(self.toi_pdf_options,text="Save in").pack(side="left",padx=2)
+        ttk.Combobox(self.toi_pdf_options,textvariable=self.toi_output,values=("TOI_PDFs","TOI"),state="readonly",width=10).pack(side="left",padx=2)
+        Btn(self.toi_pdf_options, "Open PDF folder", lambda:self.open_if(self.pdf_output_folder())).pack(side="left", padx=3)
         self.source_controls = tk.Frame(main, bg=BG)
         Btn(self.source_controls, "Organize Download", self.organize_download, padx=8).pack(side="left", padx=3)
         Btn(self.source_controls, "Format summary", lambda: self.open_report("sources")).pack(side="left", padx=3)
@@ -316,7 +324,7 @@ class App(tk.Tk):
 
         self.picker = tk.Frame(main, bg=BG)
         self.picker.pack(fill="x", pady=(3, 0))
-        card = tk.Frame(main, bg=CARD, highlightthickness=1, highlightbackground=LINE)
+        card = self.preview_card = tk.Frame(main, bg=CARD, highlightthickness=1, highlightbackground=LINE)
         card.pack(fill="both", expand=True, pady=(3, 3))
         preview_tools = tk.Frame(card, bg="#e4edf5")
         preview_tools.pack(fill="x")
@@ -418,10 +426,44 @@ class App(tk.Tk):
 
     def refresh(self):
         if self.busy:
+            self.reset_pending = True
+            self.status("Reset requested. The current operation will finish safely, then the session will clear.")
             return
+        self.reset_session()
+
+    def reset_session(self):
+        if self.preview_expanded:
+            self.toggle_preview()
         self.invalidate()
-        if self.current and self.current.get("key"):
-            self.open_report(self.current["key"])
+        self.folder.set("");self.months.set(3);self.link_all.set(False)
+        self.partial_build=False;self.current=None;self.last_export=None;self.reset_pending=False
+        self.search_index=-1;self.search_query.set("");self.search_label.config(text="")
+        self.page_size=200;self.zoom=90;self.fit_columns=True
+        self.toi_steps.set("1-17")
+        self.toi_renderer.set("Microsoft Excel" if sys.platform in ("win32","darwin") else "LibreOffice")
+        if hasattr(self,"toi_output"):self.toi_output.set("TOI_PDFs")
+        for widget in (self.source_controls,self.search_controls,self.tax_options,self.toi_pdf_options):widget.pack_forget()
+        self.dashboard_options.pack_forget()
+        if self.audit_panel is not None:
+            self.audit_panel.reset();self.audit_panel.pack_forget()
+        if not self.preview_card.winfo_manager():self.preview_card.pack(fill="both",expand=True,before=self.status_lbl,pady=3)
+        self.set_picker([],"");self.tree.delete(*self.tree.get_children());self.tree["columns"]=()
+        self.tree.xview_moveto(0);self.tree.yview_moveto(0)
+        self.last_table=None;self.page_label.config(text="");self.company_label.config(text="Select a company folder")
+        self.title_lbl.config(text="Your audit workspace");self.sub_lbl.config(text="")
+        self.mark_active(None);self.btn_export.set_enabled(False)
+        self.setup_styles();self.zoom_label.config(text="90%");self.config(cursor="")
+        self.status("Select the company folder to begin.")
+
+    def notify_build_done(self):
+        try:
+            if sys.platform=="win32":
+                import winsound
+                winsound.MessageBeep(winsound.MB_OK)
+            elif sys.platform=="darwin" and Path('/System/Library/Sounds/Glass.aiff').is_file():
+                _sound_subprocess.Popen(['afplay','/System/Library/Sounds/Glass.aiff'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            else:self.bell()
+        except (OSError,ImportError):self.bell()
 
     # ------------------------------------------------------------ table drawing
     def draw(self, columns, rows, align_right=True, tags=None):
@@ -593,6 +635,10 @@ class App(tk.Tk):
         else:
             self.run_bg(self.job_page, name, page)
 
+    def pdf_output_folder(self):
+        root=Path(self.folder.get())
+        return (engine.find_dir(root,"TOI") or root/"TOI") if self.toi_output.get()=="TOI" else root/"TOI_PDFs"
+
     def export_toi_pdf(self):
         if self.busy or not self.need_folder():
             return
@@ -602,17 +648,17 @@ class App(tk.Tk):
         except ValueError as exc:
             self.status(str(exc));return
         backend = "excel" if self.toi_renderer.get()=="Microsoft Excel" else "libreoffice"
-        self.run_bg(self.job_toi_pdf,value,backend)
+        self.run_bg(self.job_toi_pdf,value,backend,self.toi_output.get())
 
     def font_help(self):
         if self.busy or not self.need_folder():
             return
         self.run_bg(lambda: ("toi_fonts",toi_workbook_fonts(self.job_settings[0])))
 
-    def job_toi_pdf(self,value,backend='auto'):
+    def job_toi_pdf(self,value,backend='auto',output='TOI_PDFs'):
         rows = export_toi_pdfs(self.job_settings[0],value,
-                    progress=lambda done,total: self.q.put(("pdf_progress",done,total)),renderer=backend)
-        return ("toi_pdfs_done",rows)
+                    progress=lambda done,total: self.q.put(("pdf_progress",done,total)),renderer=backend,output_folder=output)
+        return ("toi_pdfs_done",rows,output)
 
     def job_tois(self):
         key = self.job_settings
@@ -771,6 +817,8 @@ class App(tk.Tk):
         if self.busy:
             self.status("Please wait, still working…")
             return
+        if self.audit_panel is not None:self.audit_panel.pack_forget()
+        if not self.preview_card.winfo_manager():self.preview_card.pack(fill="both",expand=True,before=self.status_lbl,pady=3)
         label = ACTION_TITLES.get(key) or next(m[2] for m in MENU if m[1] == key)
         self.mark_active(key)
         self.title_lbl.config(text=label.strip())
@@ -794,6 +842,13 @@ class App(tk.Tk):
         if key == "tps":
             self.tax_options.pack(fill="x", before=self.picker, pady=4)
         self.btn_export.set_enabled(key in engine.SECTIONS)
+        if key == "audit_tools":
+            if not self.need_folder():return
+            self.set_picker([],"");self.preview_card.pack_forget()
+            if self.audit_panel is None:self.audit_panel=AuditToolsPanel(self.main_panel,self)
+            self.audit_panel.pack(fill="both",expand=True,before=self.status_lbl,pady=4)
+            self.audit_panel.load()
+            return
         if key == "import_results":
             self.set_picker([], "")
             self.draw(["Download source", "Destination", "Result"],self.import_results)
@@ -969,12 +1024,21 @@ class App(tk.Tk):
                 msg = self.q.get_nowait()
                 kind = msg[0]
                 if kind in ("batch_progress", "pdf_progress"):
+                    if self.reset_pending:continue
                     action = "Exporting TOI PDFs" if kind == "pdf_progress" else "Converting target PDFs"
                     self.status(f"{action}: {msg[1]} / {msg[2]} completed…")
                     continue
                 self.busy = False
                 self.config(cursor="")
-                if kind == "prepared_sources":
+                if self.reset_pending:
+                    self.reset_pending=False;self.reset_session();continue
+                if kind == "audit_tools_loaded":
+                    if self.audit_panel is not None:self.audit_panel.populate(msg[1])
+                    self.status("Audit Tools ready.")
+                elif kind == "audit_document_saved":
+                    if self.audit_panel is not None:self.audit_panel.saved(msg[1],msg[2])
+                    self.status("Saved: "+msg[2])
+                elif kind == "prepared_sources":
                     self.import_results = msg[1]
                     moved = sum(r[2]=="MOVED" for r in msg[1])
                     file_rows = [r for r in msg[1] if not r[2].startswith("INFO:")]
@@ -990,7 +1054,7 @@ class App(tk.Tk):
                 elif kind == "toi_pdfs_done":
                     self.draw(["TOI workbook", "Steps", "Result", "PDF file"],msg[1])
                     successful = sum(r[2]=="EXPORTED" for r in msg[1])
-                    self.status(f"TOI PDF export: {successful}/{len(msg[1])} workbooks exported. See TOI_PDFs.")
+                    self.status(f"TOI PDF export: {successful}/{len(msg[1])} workbooks exported. See {msg[2] if len(msg)>2 else 'TOI_PDFs'}.")
                 elif kind == "batch_done":
                     self.last_conversion_results = msg[1]
                     self.conversion_note = msg[2]
@@ -1022,6 +1086,7 @@ class App(tk.Tk):
                     self.set_picker([], "")
                     self.draw(cols, rows)
                     self.status(note)
+                    if _exp:self.notify_build_done()
                 elif kind == "sheets":
                     _k, key, tables = msg
                     self.current = {"key": key, "tables": tables}
