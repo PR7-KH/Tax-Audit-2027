@@ -18,3 +18,9 @@ Check against a V5.1 workbook built from the same folder (needs LibreOffice):
 
 Not yet ported: TOI PDF export (Module 10), report builder (Module 11),
 the Control Center window (control_center.py).
+
+Interface updates and Mac upgrade checks: see [UI_MAC_TEST.md](UI_MAC_TEST.md).
+Tax Paid Summary uses all 12 months of the older Info year and `--months` of the
+newer year. Both year cells (Sheet2!B3 and Sheet3!B3) must be valid and different.
+Consolidated tax sheets now put grand/year totals above their transactions;
+file-level subtotals remain available in MTR detail.

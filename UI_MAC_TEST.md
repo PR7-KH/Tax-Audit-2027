@@ -1,61 +1,63 @@
-# Compact workspace and responsive preview — Mac test
+# Larger preview and report layout update
 
-Replace **control_center.py** in your existing working app folder. Keep your
-existing engine.py, calc.py, consolidate.py, templates and company data. Launch as
-usual. The tax calculation and export implementations are unchanged.
+## Install on your Mac
+
+Close the app. Back up your working folder, then replace **control_center.py** and
+**engine.py** together from this version. Keep your existing consolidate.py,
+calc.py, templates, source folders and launchers. Reopen as usual. Previous
+versions are recoverable through Git history.
 
 ## Interface
 
-- Opens maximized with the normal Mac title bar, rather than native fullscreen.
-- Compact company information gives the report most of the window height.
-- Selecting a folder automatically lists PR/SR/TOS/WHT file counts by year,
-  TOI/Info counts and financial-folder counts, without opening workbooks.
-- Source overview is an inventory, not validation of workbook contents. Use
-  **Validate tax files** when you want the existing detailed source validation.
-- MTR detail uses sheet buttons; duplicate sidebar entries are removed.
-- The earlier-year month setting appears only in Tax Paid Summary; click Apply
-  after editing it. This changes the report options and requires a new build.
-- Preview uses 200-row pages. Next/Previous reaches every row, including rows
-  after 5,000. Revisiting cached pages does not calculate them again.
-- Use −/+ for 50–150% zoom. Fit columns toggles between compact equal widths and
-  content-based widths; horizontal scrolling is available for long cells.
+- Short header and compact report controls leave more vertical space for data.
+- Boxed sidebar entries; Summary MTR and MTR detail are adjacent.
+- Source overview has nested File names & formats and Validate tax files entries.
+  Inventory lists Excel, PDF and CSV names without importing their contents.
+- Fit columns now applies to all tables, including source and finance views, and
+  recalculates on resize. Actual widths restores wider content-based columns.
+- Expand preview hides the header and sidebar for a taller, full-width report.
+  Restore layout brings the menus back without rebuilding the workbook.
+- Zoom and 200-row paging remain available. Every worksheet row is accessible.
 
-## Cache behavior
+## Consolidation layout (preview and Excel export)
 
-Build all data prepares the workbook once. Report navigation reuses it, and
-previews evaluate only the selected sheet's page. Up to 32 pages are cached;
-older pages can be reformatted after eviction, without reconsolidation. Source
-file edits are picked up with Refresh, folder selection, or a changed build
-option. Export still rebuilds from source, as in the existing application.
+For two years, each PR/SR/TOS/WHT sheet starts with Grand Total, Year 2025,
+Year 2026 (using actual input years), followed by the two source heading rows
+and all transactions. Monthly/file subtotal rows and the trailing year summary
+are removed from these sheets. MTR detail retains file totals and links. Summary
+MTR retains its year figures. Transaction values and numeric totals are unchanged.
+The same approach handles one year or more than two years.
 
-## Check on your Mac
+## Tax Paid Summary
 
-1. Select a company and confirm PR counts for each year and the GL file count.
-2. Build all data; open Consolidated data, switch reports and return. Check that
-   the displayed data is ready without another consolidation.
-3. Visit the last preview page in a sheet with more than 5,000 rows. Compare the
-   row numbers and totals against your existing workbook.
-4. Test zoom, column fitting, scrolling, MTR sheet buttons and normal resizing.
-5. Open Tax Paid Summary, change months and Apply; compare results and exports
-   with your previous version using the same settings and source files.
-6. Select another company, then edit a source file and Refresh. Confirm that
-   previous-company and stale-page values are not reused.
+The former 'earlier year' label was incorrect: the existing month selection
+applied to Sheet3. Now Info Sheet2!B3 and Sheet3!B3 identify the actual years;
+the older year always sums 12 months and the newer year uses the selected count.
+Reversed sheet order is supported. Years must be valid and different; missing
+or invalid years are reported rather than silently replaced with 2024/2025.
+The control and column headings identify the newer year explicitly.
 
-## Validation
+Opening Tax Paid Summary first reads Info only, without consolidating monthly
+returns. Changing its months refreshes that summary in the prepared workbook.
+Opening other tax reports builds the full workbook when necessary. Refresh
+picks up source-file edits. Export still builds from source, so export timing
+is different from cached preview timing.
 
-Run `python -m unittest discover -s tests -v`. Regression checks cover inventory
-counts without opening workbooks, automatic inventory, paging beyond row 5,000,
-formula-value preservation, cached navigation, workbook reuse, option changes,
-normal-window maximization and prevention of simultaneous export jobs. A live Tk
-window test on a virtual Linux display also passed startup, automatic inventory,
-200-row paging beyond row 5,000, cached return visits, zoom, column fitting and
-contextual month controls with no callback errors. For a synthetic 8,201-row,
-two-column workbook, first preview navigation took 0.14s and cached return took
-0.13s; the workbook was built once. These are preview timings, not a real-company
-build benchmark. Native
-Mac appearance and timing with your actual workbooks require manual testing.
+## Validation and Mac checks
 
-## Rollback
+Run `python -m unittest discover -s tests -v` (16 tests). Tests cover transaction
+and total preservation through actual Excel export/reopen, retained MTR detail,
+normal/reversed years, month counts 1/3/12, summary-only loading, cached workbook
+reuse, inventory file formats, paging, styling and column-fit redraw behavior.
 
-Close the app and restore control_center.py from the previous GitHub commit or
-your local backup. No calculation modules or source workbooks were changed.
+Live Tk checks on a virtual Linux display passed normal startup, cached
+navigation, zoom, column fit for Source overview, context options, expanded
+preview and layout restoration. The preview grew from 1111×613 to 1291×730 in
+that test. A 19,000-cell formatting microbenchmark improved from 0.60s to 0.10s;
+this does not establish total build time or performance versus Excel VBA.
+
+On your Mac, check the same controls with your company data. Compare grand and
+year totals, transaction counts, MTR file totals, and older/newer-year tax paid
+amounts against your trusted workbook. Consolidated sheet positions intentionally
+changed, so a cell-by-cell layout comparison with the previous export will differ.
+Native Mac appearance and actual-company timing remain to be verified.

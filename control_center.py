@@ -27,13 +27,14 @@ NUMBER = re.compile(r"^-?[\d,]+(\.\d+)?%?$")
 MENU = [
     ("group", "", "TAX AUDIT"),
     ("item", "sources", "Source overview"),
-    ("item", "check_tax", "Validate tax files"),
+    ("sub", "source_files", "File names & formats"),
+    ("sub", "check_tax", "Validate tax files"),
     ("item", "build_all", "Build all data"),
     ("item", "consolidate", "Consolidated data"),
     ("item", "summary", "Summary MTR"),
+    ("item", "mtr", "MTR detail"),
     ("item", "toi", "TOI compare"),
     ("item", "fulltoi", "FULL TOI"),
-    ("item", "mtr", "MTR detail  (all four)"),
     ("item", "tps", "Tax Paid Summary"),
     ("item", "dashboard", "Audit Dashboard"),
     ("group", "", "FINANCIAL AUDIT"),
@@ -52,7 +53,7 @@ SUBTITLE = {
     "sources": "Company file counts by tax year and financial folder. No workbook contents are opened.",
     "check_tax": "Reads every monthly tax file with the same reader as V5.1 and reports problems before any build.",
     "build_all": "Builds every tax report in memory. Nothing is saved until you export.",
-    "consolidate": "Consolidated monthly data with file subtotals and year totals (PR, SR, TOS, WHT).",
+    "consolidate": "Consolidated monthly data with grand and year totals at the top (PR, SR, TOS, WHT).",
     "summary": "Year totals for each tax type.",
     "toi": "TOI steps 4 to 7 with Compare, % Change and Remark.",
     "fulltoi": "All TOI steps 1 to 17 in one sheet.",
@@ -86,7 +87,7 @@ def report_row_tag(values, index, numbered=False):
         return "error"
     if any(v in ("missing", "empty", "folder not found") for v in text):
         return "warning"
-    if text and (text[0] in ("total", "grand total") or text[0].startswith("subtotal ")):
+    if text and (text[0] in ("total", "grand total") or text[0].startswith(("subtotal ", "year "))):
         return "total"
     if text and (text[0] == "year" or text[0].startswith(("folder:", "year:"))):
         return "section"
@@ -99,21 +100,24 @@ def source_inventory(folder):
     rows = []
     for tax in engine.cons.LAYOUTS:
         directory = engine.find_dir(root, tax)
-        counts = Counter(year for year, path in engine.cons.files_in(directory)) if directory else Counter()
+        paths = list(engine.cons.files_in(directory)) if directory else []
+        counts = Counter(year for year, path in paths)
         for year, count in sorted(counts.items()):
-            rows.append([tax, year, count, "Found"])
+            rows.append([tax, year, count, "Found", "; ".join(f"{p.name} [Excel]" for y, p in paths if y == year)])
         if not counts:
-            rows.append([tax, "—", 0, "Missing" if directory is None else "Empty"])
+            rows.append([tax, "—", 0, "Missing" if directory is None else "Empty", ""])
     for name in ("TOI", "Info"):
         directory = engine.find_dir(root, name)
-        count = len([p for p in directory.glob("*.xlsx") if not p.name.startswith((".", "~$"))]) if directory else 0
-        rows.append([name, "All", count, "Found" if count else "Missing"])
+        files = [p for p in directory.glob("*.xlsx") if not p.name.startswith((".", "~$"))] if directory else []
+        count = len(files)
+        rows.append([name, "All", count, "Found" if count else "Missing", "; ".join(f"{p.name} [Excel]" for p in sorted(files))])
     for key, (label, _) in engine.FINANCE_FOLDERS.items():
         directory = engine.finance_folder(root, key)
-        count = sum(1 for p in directory.rglob("*") if p.is_file() and
+        files = sorted(p for p in directory.rglob("*") if p.is_file() and
                     p.suffix.lower() in engine.FIN_EXT and not any(
-                        part.startswith((".", "~$")) for part in p.relative_to(directory).parts)) if directory else 0
-        rows.append([label, "All", count, "Found" if count else "No files"])
+                        part.startswith((".", "~$")) for part in p.relative_to(directory).parts)) if directory else []
+        rows.append([label, "All", len(files), "Found" if files else "No files",
+                     "; ".join(f"{p.relative_to(directory)} [{p.suffix[1:].upper()}]" for p in files)])
     return rows
 
 
@@ -146,6 +150,7 @@ class App(tk.Tk):
         self.folder = tk.StringVar()
         self.months = tk.IntVar(value=3)
         self.link_all = tk.BooleanVar(value=False)
+        self.partial_build = False
         self.built = None          # (key, workbook, log, calc)
         self.current = None        # dict describing the report on screen
         self.last_export = None
@@ -158,6 +163,7 @@ class App(tk.Tk):
         self.zoom = 90
         self.fit_columns = True
         self.inventory = None
+        self.last_table = None
         self.setup_styles()
         self.build_header()
         self.build_body()
@@ -188,17 +194,17 @@ class App(tk.Tk):
         st.configure("Horizontal.TScrollbar", background="#c4cedb", troughcolor=BG, borderwidth=0)
 
     def build_header(self):
-        head = tk.Frame(self, bg=NAVY)
+        head = self.header = tk.Frame(self, bg=NAVY)
         head.pack(fill="x")
         tk.Label(head, text="AUDIT  /  FINANCE", bg=NAVY, fg="white",
-                 font=(FONT, 18, "bold")).pack(side="left", padx=22, pady=(14, 14))
+                 font=(FONT, 13, "bold")).pack(side="left", padx=12, pady=5)
         tk.Label(head, text="PRIVATE WORKSPACE  •  LOCAL FILES", bg=NAVY, fg="#9db4d3",
-                 font=(FONT, 11)).pack(side="left", pady=(18, 0))
+                 font=(FONT, 9)).pack(side="left", pady=5)
 
-        bar = tk.Frame(self, bg=CARD, highlightthickness=1, highlightbackground=LINE)
+        bar = self.folder_bar = tk.Frame(self, bg=CARD, highlightthickness=1, highlightbackground=LINE)
         bar.pack(fill="x")
         row = tk.Frame(bar, bg=CARD)
-        row.pack(fill="x", padx=18, pady=(10, 4))
+        row.pack(fill="x", padx=8, pady=4)
         tk.Label(row, text="Company folder", bg=CARD, fg=MUTED, font=(FONT, 11, "bold")).pack(side="left")
         tk.Entry(row, textvariable=self.folder, bg="#f7f9fc", fg=TEXT, insertbackground=TEXT,
                  relief="flat", highlightthickness=1, highlightbackground=LINE,
@@ -206,23 +212,20 @@ class App(tk.Tk):
         Btn(row, "Select folder", self.pick_folder).pack(side="left", padx=(0, 6))
         Btn(row, "Open folder", lambda: self.open_if(self.folder.get()), color="#5d7391").pack(side="left", padx=(0, 6))
         Btn(row, "Refresh", self.refresh, color="#5d7391").pack(side="left")
-        opt = tk.Frame(bar, bg=CARD)
-        opt.pack(fill="x", padx=18, pady=(0, 10))
-        tk.Label(opt, text="SOURCE WORKSPACE  /  Tax returns & financial documents",
-                 bg=CARD, fg=MUTED, font=(FONT, 10)).pack(side="left")
-        tk.Checkbutton(opt, text="Fill ADT rows V5.1 leaves blank", variable=self.link_all, bg=CARD, fg=TEXT,
-                       activebackground=CARD, activeforeground=TEXT, selectcolor=CARD, font=(FONT, 10),
-                       command=self.invalidate).pack(side="right")
 
     def build_body(self):
-        body = tk.Frame(self, bg=BG)
+        body = self.body = tk.Frame(self, bg=BG)
         body.pack(fill="both", expand=True)
-        side = tk.Frame(body, bg=SIDE, width=205)
+        side = self.sidebar = tk.Frame(body, bg=SIDE, width=180)
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
-        canvas = tk.Canvas(side, bg=SIDE, highlightthickness=0, width=205)
+        canvas = tk.Canvas(side, bg=SIDE, highlightthickness=0, width=180)
         inner = tk.Frame(canvas, bg=SIDE)
-        canvas.create_window((0, 0), window=inner, anchor="nw", width=205)
+        window = canvas.create_window((0, 0), window=inner, anchor="nw", width=180)
+        scroll = ttk.Scrollbar(side, orient="vertical", command=canvas.yview)
+        scroll.pack(side="right", fill="y")
+        canvas.configure(yscrollcommand=scroll.set)
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
         canvas.pack(fill="both", expand=True)
         inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind("<MouseWheel>", lambda e: canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"))
@@ -231,29 +234,30 @@ class App(tk.Tk):
                 tk.Label(inner, text=label, bg=SIDE, fg="#7f9cc4", font=(FONT, 10, "bold"),
                          anchor="w").pack(fill="x", padx=18, pady=(16, 4))
                 continue
-            lab = tk.Label(inner, text=("      " + label) if kind == "sub" else label, bg=SIDE, fg="#d5e1f1",
-                           anchor="w", padx=18 if kind == "item" else 30, pady=6, cursor="hand2",
-                           font=(FONT, 12 if kind == "item" else 11))
-            lab.pack(fill="x")
+            lab = tk.Label(inner, text=("      " + label) if kind == "sub" else label, bg=SIDE_HOVER, fg="#d5e1f1", relief="solid", borderwidth=1,
+                           anchor="w", padx=10 if kind == "item" else 16, pady=7, cursor="hand2",
+                           font=(FONT, 11 if kind == "item" else 10))
+            lab.pack(fill="x", padx=(18 if kind == "sub" else 7, 7), pady=3)
+            lab.bind("<MouseWheel>", lambda event: canvas.yview_scroll(-1 if event.delta > 0 else 1, "units"))
             lab.bind("<Button-1>", lambda e, k=key: self.open_report(k))
             lab.bind("<Enter>", lambda e, l=lab: l.config(bg=SIDE_HOVER) if l is not self.active_label() else None)
-            lab.bind("<Leave>", lambda e, l=lab: l.config(bg=SIDE) if l is not self.active_label() else None)
+            lab.bind("<Leave>", lambda e, l=lab: l.config(bg=SIDE_HOVER) if l is not self.active_label() else None)
             self.menu_labels[key] = lab
         self.active_key = None
 
-        main = tk.Frame(body, bg=BG)
-        main.pack(side="left", fill="both", expand=True, padx=12, pady=8)
-        top = tk.Frame(main, bg=BG)
+        main = self.main_panel = tk.Frame(body, bg=BG)
+        main.pack(side="left", fill="both", expand=True, padx=6, pady=4)
+        top = self.report_header = tk.Frame(main, bg=BG)
         top.pack(fill="x")
         titles = tk.Frame(top, bg=BG)
         titles.pack(side="left", fill="x", expand=True)
-        self.title_lbl = tk.Label(titles, text="Your audit workspace", bg=BG, fg=NAVY, font=(FONT, 17, "bold"), anchor="w")
+        self.title_lbl = tk.Label(titles, text="Your audit workspace", bg=BG, fg=NAVY, font=(FONT, 14, "bold"), anchor="w")
         self.title_lbl.pack(fill="x")
         self.sub_lbl = tk.Label(titles, text="Choose a report on the left. Reports open for viewing; export when you want a file.",
                                 bg=BG, fg=MUTED, font=(FONT, 11), anchor="w", justify="left", wraplength=700)
-        self.sub_lbl.pack(fill="x")
-        tools = tk.Frame(main, bg=BG)
-        tools.pack(fill="x", pady=(6, 4))
+        # Descriptions are shown in the status area; keep the preview tall.
+        tools = tk.Frame(top, bg=BG)
+        tools.pack(side="right")
         self.btn_export = Btn(tools, "Export this report", self.export_this, color=GREEN, hover="#14664a")
         self.btn_export.pack(side="left", padx=4)
         Btn(tools, "Export everything", self.export_all).pack(side="left", padx=4)
@@ -263,16 +267,17 @@ class App(tk.Tk):
             wraplength=max(240, event.width - 12)))
         self.company_label = tk.Label(main, text="Select a company folder", bg=BG, fg=MUTED,
                                       font=(FONT, 10), anchor="w")
-        self.company_label.pack(fill="x", pady=4)
+        # The selected company path is already visible in the folder bar.
         self.tax_options = tk.Frame(main, bg=BG)
-        tk.Label(self.tax_options, text="Months of earlier year", bg=BG, fg=TEXT).pack(side="left")
+        self.months_label = tk.Label(self.tax_options, text="Months of newest year (older year: all 12)", bg=BG, fg=TEXT)
+        self.months_label.pack(side="left")
         tk.Spinbox(self.tax_options, from_=1, to=12, width=4, textvariable=self.months).pack(side="left", padx=8)
         Btn(self.tax_options, "Apply", self.apply_months).pack(side="left")
 
         self.picker = tk.Frame(main, bg=BG)
-        self.picker.pack(fill="x", pady=(10, 0))
+        self.picker.pack(fill="x", pady=(3, 0))
         card = tk.Frame(main, bg=CARD, highlightthickness=1, highlightbackground=LINE)
-        card.pack(fill="both", expand=True, pady=(8, 8))
+        card.pack(fill="both", expand=True, pady=(3, 3))
         preview_tools = tk.Frame(card, bg="#e4edf5")
         preview_tools.pack(fill="x")
         Btn(preview_tools, "−", lambda: self.change_zoom(-10)).pack(side="left", padx=2)
@@ -280,6 +285,12 @@ class App(tk.Tk):
         self.zoom_label.pack(side="left")
         Btn(preview_tools, "+", lambda: self.change_zoom(10)).pack(side="left", padx=2)
         Btn(preview_tools, "Fit columns", self.toggle_fit).pack(side="left", padx=4)
+        Btn(preview_tools, "Actual widths", self.actual_widths).pack(side="left", padx=2)
+        self.preview_expanded = False
+        self.expand_button = Btn(preview_tools, "Expand preview", self.toggle_preview)
+        self.expand_button.pack(side="left", padx=4)
+        self.dashboard_options = tk.Checkbutton(preview_tools, text="Fill blank ADT links",
+            variable=self.link_all, bg="#e4edf5", command=self.invalidate)
         Btn(preview_tools, "Previous", lambda: self.change_page(-1)).pack(side="right", padx=2)
         Btn(preview_tools, "Next", lambda: self.change_page(1)).pack(side="right", padx=2)
         self.page_label = tk.Label(preview_tools, text="", bg="#e4edf5", fg=NAVY)
@@ -300,6 +311,7 @@ class App(tk.Tk):
         ys.pack(side="right", fill="y")
         xs.pack(side="bottom", fill="x")
         self.tree.pack(fill="both", expand=True)
+        self.tree.bind("<Configure>", self.resize_preview)
         self.status_lbl = tk.Label(main, text="", bg=BG, fg=MUTED, anchor="w", font=(FONT, 10))
         self.status_lbl.pack(fill="x")
 
@@ -309,7 +321,7 @@ class App(tk.Tk):
 
     def mark_active(self, key):
         for k, lab in self.menu_labels.items():
-            lab.config(bg=SIDE, fg="#d5e1f1")
+            lab.config(bg=SIDE_HOVER, fg="#d5e1f1")
         self.active_key = key
         if key in self.menu_labels:
             self.menu_labels[key].config(bg=ACCENT, fg="white")
@@ -357,15 +369,21 @@ class App(tk.Tk):
         self.tree.delete(*self.tree.get_children())
         ids = [f"c{i}" for i in range(len(columns))]
         self.tree["columns"] = ids
+        self.last_table = (columns, rows, align_right, tags)
         scale = self.zoom / 100
-        available = max(300, self.tree.winfo_width() - 24)
+        available = max(100, self.tree.winfo_width() - 24)
+        weights = []
+        for i, name in enumerate(columns):
+            longest = max([len(str(name))] + [len(str(r[i])) for r in rows[:100] if i < len(r)])
+            weights.append(5 if name == "#" else max(9, min(longest + 2, 45)))
+        weight_total = sum(weights) or 1
         for i, (cid, name) in enumerate(zip(ids, columns)):
             cells = [str(r[i]) for r in rows[:100] if i < len(r) and r[i] not in (None, "")]
             numeric = align_right and cells and sum(bool(NUMBER.match(c)) for c in cells) / len(cells) > 0.6
             natural = max(55, min(max([len(name)] + [len(c) for c in cells]) * 7 + 20, 400))
-            width = max(45, available // max(1, len(ids))) if self.fit_columns else natural
+            width = max(12, int(available * weights[i] / weight_total)) if self.fit_columns else int(natural * scale)
             self.tree.heading(cid, text=name)
-            self.tree.column(cid, width=int(width * scale), minwidth=30,
+            self.tree.column(cid, width=width, minwidth=10,
                              anchor="e" if numeric else "w", stretch=False)
         for index, r in enumerate(rows):
             values = ["" if v is None else v for v in r]
@@ -383,7 +401,6 @@ class App(tk.Tk):
         except (ValueError, tk.TclError):
             messagebox.showwarning("Months", "Enter a number from 1 to 12.")
             return
-        self.invalidate()
         self.open_report("tps")
 
     def change_zoom(self, delta):
@@ -393,12 +410,42 @@ class App(tk.Tk):
         style.configure("Treeview", font=(FONT, max(7, round(11*self.zoom/100)), "bold"),
                         rowheight=max(18, round(30*self.zoom/100)))
         style.configure("Treeview.Heading", font=(FONT, max(7, round(11*self.zoom/100)), "bold"))
-        if self.current and self.current.get("sheet") and not self.busy:
-            self.show_sheet(self.current["sheet"])
+        self.redraw_table()
+
+    def redraw_table(self):
+        if self.last_table is not None:
+            self.draw(*self.last_table[:3], tags=self.last_table[3])
 
     def toggle_fit(self):
-        self.fit_columns = not self.fit_columns
-        self.change_zoom(0)
+        self.fit_columns = True
+        self.redraw_table()
+
+    def actual_widths(self):
+        self.fit_columns = False
+        self.redraw_table()
+
+    def toggle_preview(self):
+        self.preview_expanded = not self.preview_expanded
+        if self.preview_expanded:
+            for widget in (self.header, self.folder_bar, self.sidebar, self.report_header):
+                widget.pack_forget()
+            self.expand_button.config(text="Restore layout")
+        else:
+            self.folder_bar.pack(fill="x", before=self.body)
+            self.header.pack(fill="x", before=self.folder_bar)
+            self.sidebar.pack(side="left", fill="y", before=self.main_panel)
+            self.report_header.pack(fill="x", before=self.picker)
+            self.expand_button.config(text="Expand preview")
+
+    def resize_preview(self, event):
+        if self.fit_columns:
+            # Resize columns only; don't rebuild thousands of table items.
+            ids = self.tree["columns"]
+            widths = [self.tree.column(cid, "width") for cid in ids]
+            total = sum(widths) or 1
+            available = max(100, event.width - 24)
+            for cid, width in zip(ids, widths):
+                self.tree.column(cid, width=max(10, int(available * width / total)))
 
     def change_page(self, direction):
         if self.busy or not self.current or not self.current.get("sheet"):
@@ -432,6 +479,9 @@ class App(tk.Tk):
     def present_page(self, msg):
         _, name, page, ncols, total, rows, tags = msg
         self.draw(["#"] + [calc_letter(i+1) for i in range(ncols)], rows, tags=tags)
+        if name == "Tax Paid Summary" and self.built:
+            label = self.built[1][name]["D9"].value
+            self.months_label.config(text=f"Newest year: {label} · older year: 12 months")
         self.page_label.config(text=f"Page {page+1} / {max(1, (total+self.page_size-1)//self.page_size)}")
         self.status(f"{name}: rows {page*self.page_size+1:,}–{min(total,(page+1)*self.page_size):,} of {total:,}. All rows available using Next / Previous.")
 
@@ -470,12 +520,15 @@ class App(tk.Tk):
         self.current = {"key": key}
         self.page_label.config(text="")
         self.tax_options.pack_forget()
+        self.dashboard_options.pack_forget()
+        if key == "dashboard":
+            self.dashboard_options.pack(side="left", padx=6)
         if key == "tps":
             self.tax_options.pack(fill="x", before=self.picker, pady=4)
         self.btn_export.set_enabled(key in engine.SECTIONS)
-        if key == "sources":
+        if key in ("sources", "source_files"):
             if self.need_folder():
-                self.run_bg(self.job_inventory)
+                self.run_bg(self.job_inventory if key == "sources" else self.job_source_files)
             return
         if key in ("check_fin", "tie_out") or key.startswith("fin_"):
             if not self.need_folder():
@@ -512,10 +565,37 @@ class App(tk.Tk):
         threading.Thread(target=go, daemon=True).start()
 
     # ------------------------------------------------------------ background jobs (no Tk calls here)
-    def ensure_built(self):
+    def ensure_built(self, summary_only=False):
         key = self.job_settings
-        if self.built is None or self.built[0] != key:
-            wb, log = engine.build_workbook(key[0], key[1], key[2])
+        needs_full = not summary_only and getattr(self, "partial_build", False) is True
+        if self.built is None or self.built[0] != key or needs_full:
+            if summary_only and self.built is None:
+                info_dir = engine.find_dir(Path(key[0]), "INFO")
+                info_file = engine.first_xlsx(info_dir) if info_dir else None
+                if info_file is None:
+                    raise ValueError("Tax Paid Summary needs an Excel workbook in the Info folder.")
+                info = engine.load_workbook(info_file, data_only=True)
+                try:
+                    wb, log = engine.Workbook(), engine.Log()
+                    wb.remove(wb.active)
+                    engine.company_info(wb, info, log)
+                    engine.tax_paid_summary(wb, info, key[1], log)
+                finally:
+                    info.close()
+                self.partial_build = True
+            elif self.built and not needs_full and self.built[0][0] == key[0] and self.built[0][2] == key[2]:
+                wb, log = self.built[1:3]
+                info_dir = engine.find_dir(Path(key[0]), "INFO")
+                info_file = engine.first_xlsx(info_dir) if info_dir else None
+                if info_file:
+                    info = engine.load_workbook(info_file, data_only=True)
+                    try:
+                        engine.tax_paid_summary(wb, info, key[1], log)
+                    finally:
+                        info.close()
+            else:
+                wb, log = engine.build_workbook(key[0], key[1], key[2])
+                self.partial_build = False
             self.page_cache.clear()
             self.sheet_pages.clear()
             self.sheet_dimensions.clear()
@@ -526,8 +606,21 @@ class App(tk.Tk):
         folder = self.job_settings[0]
         if self.inventory is None or self.inventory[0] != folder:
             self.inventory = (folder, source_inventory(folder))
-        return ("table", ["Source", "Year / scope", "Files", "Status"], self.inventory[1],
+        return ("table", ["Source", "Year / scope", "Files", "Status", "File names / format"], self.inventory[1],
                 "File inventory only. Use Validate tax files to check headings, values and formula caches.", False)
+
+    def job_source_files(self):
+        root = Path(self.job_settings[0])
+        rows = []
+        for path in sorted(root.rglob("*")):
+            if (path.is_file() and path.suffix.lower() in engine.FIN_EXT and not any(
+                    part.startswith((".", "~$")) for part in path.relative_to(root).parts)):
+                rel = path.relative_to(root)
+                kind = {".xlsx": "Excel", ".xlsm": "Excel macro", ".xls": "Excel legacy",
+                        ".csv": "CSV", ".pdf": "PDF"}[path.suffix.lower()]
+                rows.append([rel.parts[0], rel.parts[1] if len(rel.parts) > 2 else "—", path.name, kind, str(rel)])
+        return ("table", ["Folder", "Year / subfolder", "File name", "Format", "Relative path"], rows,
+                f"{len(rows):,} files found. Inventory only; PDF/CSV presence does not imply tax import support.", False)
 
     def job_check_tax(self):
         rows = engine.check_sources(self.job_settings[0])
@@ -552,7 +645,7 @@ class App(tk.Tk):
                 f"{label}: reconciliation is added after sample files are reviewed.", False)
 
     def job_report(self, key):
-        built = self.ensure_built()
+        built = self.ensure_built(summary_only=key == "tps")
         _k, wb, log, cal = built
         if key == "log":
             rows = [list(r) for r in log]

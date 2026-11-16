@@ -38,9 +38,9 @@ class PreviewTests(unittest.TestCase):
             (root / 'GL' / 'ledger.xlsx').touch()
             with patch.object(ui.engine, 'load_workbook', side_effect=AssertionError('must not open')):
                 rows = ui.source_inventory(root)
-            self.assertIn(['PR', '2025', 12, 'Found'], rows)
-            self.assertIn(['PR', '2026', 13, 'Found'], rows)
-            self.assertIn(['General ledger', 'All', 1, 'Found'], rows)
+            self.assertIn(['PR', '2025', 12, 'Found'], [r[:4] for r in rows])
+            self.assertIn(['PR', '2026', 13, 'Found'], [r[:4] for r in rows])
+            self.assertIn(['General ledger', 'All', 1, 'Found'], [r[:4] for r in rows])
 
     def test_all_rows_available_and_formula_values_preserved(self):
         wb = Workbook(); ws = wb.active; ws.title = 'PR'
@@ -71,7 +71,7 @@ class PreviewTests(unittest.TestCase):
     def test_report_switch_does_not_rebuild(self):
         wb = Workbook(); wb.active.title = 'PR'
         app = self.app(wb)
-        app.ensure_built.side_effect = lambda: ui.App.ensure_built(app)
+        app.ensure_built.side_effect = lambda **kwargs: ui.App.ensure_built(app, **kwargs)
         with patch.object(ui.engine, 'build_workbook') as build:
             self.assertEqual(ui.App.job_report(app, 'consolidate'), ('sheets', 'consolidate', {'PR': None}))
             ui.App.job_report(app, 'summary')
@@ -82,9 +82,9 @@ class PreviewTests(unittest.TestCase):
         wb = Workbook(); app = self.app(wb)
         app.page_cache[('PR', 0)] = 'old'
         app.job_settings = ('company', 6, False)
-        with patch.object(ui.engine, 'build_workbook', return_value=(wb, [])) as build:
+        with patch.object(ui.engine, 'build_workbook') as build, patch.object(ui.engine, 'find_dir', return_value=None):
             ui.App.ensure_built(app)
-            build.assert_called_once_with('company', 6, False)
+            build.assert_not_called()
         self.assertFalse(app.page_cache)
         self.assertEqual(app.built[0], app.job_settings)
 

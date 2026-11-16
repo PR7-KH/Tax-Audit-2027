@@ -55,10 +55,14 @@ def find_dir(root, name):
 
 
 def fmt_all(ws):
+    fonts = {}
     for row in ws.iter_rows():
         for c in row:
-            f = copy(c.font)
-            c.font = Font(name=FONT, size=10, bold=f.bold, italic=f.italic, color=f.color)
+            f = c.font
+            key = (f.bold, f.italic, f.color)
+            if key not in fonts:
+                fonts[key] = Font(name=FONT, size=10, bold=f.bold, italic=f.italic, color=f.color)
+            c.font = fonts[key]
 
 
 def last_row_col(ws, col=1):
@@ -307,25 +311,33 @@ def company_info(wb, info_wb, log):
     return ws
 
 
+def info_year(sheet):
+    """Require the year recorded by the Info template instead of guessing it."""
+    value = sheet["B3"].value
+    if num(value) and value == int(value) and 1900 <= value <= 2100:
+        return int(value)
+    match = re.fullmatch(r"(?:Year\s*)?(19\d{2}|20\d{2}|2100)", str(value).strip(), re.I)
+    if match:
+        return int(match.group(1))
+    raise ValueError(f"Info {sheet.title}!B3 must contain its year (for example 2026).")
+
+
 def tax_paid_summary(wb, info_wb, months_prior, log):
+    if not 1 <= months_prior <= 12:
+        raise ValueError("Months of newest year must be between 1 and 12.")
     s1, s2, s3 = (ci_sheet(info_wb, n) for n in ("Sheet1", "Sheet2", "Sheet3"))
-    if s2 is None or s3 is None:
-        log.add("Tax Paid Summary", "Sheet2/Sheet3 missing in Company Info file")
+    if s1 is None or s2 is None or s3 is None:
+        log.add("Tax Paid Summary", "Sheet1/Sheet2/Sheet3 missing in Company Info file")
         return None
-    ws = wb.create_sheet("Tax Paid Summary")
-    y_a = int(s2["B3"].value) if num(s2["B3"].value) or str(s2["B3"].value).isdigit() else 2024
-    y_b = int(s3["B3"].value) if num(s3["B3"].value) or str(s3["B3"].value).isdigit() else 2025
-    end_b = min(3 + months_prior - 1, 14)
-    last_col = 2
-    for c in range(3, end_b + 1):
-        v = s3.cell(2, c).value
-        if num(v) and v != 0:
-            last_col = c
-    if last_col == 2:
-        period = f"Year {y_b}"
-    else:
-        m = str(s3.cell(1, last_col).value)
-        period = f"{m[:3]} - {y_b}"
+    year2, year3 = info_year(s2), info_year(s3)
+    if year2 == year3:
+        raise ValueError("Info Sheet2 and Sheet3 must describe different years.")
+    if year2 > year3:
+        s2, s3, year2, year3 = s3, s2, year3, year2
+    y_a, y_b = year2, year3
+    end_b = 3 + months_prior - 1
+    period = f"{y_b} / {months_prior} months"
+    ws = wb.create_sheet("_Tax Paid Summary")
     ws["A1"] = "TAX PAID SUMMARY"
     info_row = 3
     for src in (1, 2, 5, 6, 3):
@@ -335,21 +347,20 @@ def tax_paid_summary(wb, info_wb, months_prior, log):
     hdr = info_row + 1
     for c, v in enumerate(("N", "Tax item", f"Year {y_a}", period, "Sub Total"), start=1):
         ws.cell(hdr, c, v)
+    # Keep first-match semantics for duplicate item names, while indexing once.
+    newest_items = {}
+    for values in s3.iter_rows(min_row=2, max_row=last_row_col(s3, 1), max_col=14, values_only=True):
+        name = str(values[1] or "").strip()
+        newest_items.setdefault(name, sum(v for v in values[2:end_b] if num(v)))
     out, n = hdr + 1, 1
-    for r in range(2, last_row_col(s2, 1) + 1):
-        name = str(s2.cell(r, 2).value or "").strip()
+    for values in s2.iter_rows(min_row=2, max_row=last_row_col(s2, 1), max_col=14, values_only=True):
+        name = str(values[1] or "").strip()
         if not name or name.upper() == "TYPE OF TAX" or "???" in name:
             continue
         if len(name) <= 4 and name.isascii() and name.isdigit() and 1900 <= int(name) <= 2100:
             continue
-        v_a = sum(s2.cell(r, c).value for c in range(3, 15) if num(s2.cell(r, c).value))
-        v_b, match = 0, None
-        for rr in range(2, last_row_col(s3, 1) + 1):
-            if str(s3.cell(rr, 2).value or "").strip() == name:
-                match = rr
-                break
-        if match:
-            v_b = sum(s3.cell(match, c).value for c in range(3, end_b + 1) if num(s3.cell(match, c).value))
+        v_a = sum(v for v in values[2:14] if num(v))
+        v_b = newest_items.get(name, 0)
         if v_a or v_b:
             for c, v in enumerate((n, name, v_a, v_b, v_a + v_b), start=1):
                 ws.cell(out, c, v)
@@ -375,6 +386,13 @@ def tax_paid_summary(wb, info_wb, months_prior, log):
         ws.cell(r, 1).font = Font(name=FONT, size=10, bold=True)
     for col, w in zip("ABCDE", (30, 48, 16, 16, 16)):
         ws.column_dimensions[col].width = w
+    old = ci_sheet(wb, "Tax Paid Summary")
+    if old is not None:
+        position = wb.index(old)
+        del wb[old.title]
+        wb.move_sheet(ws, offset=position - wb.index(ws))
+    ws.title = "Tax Paid Summary"
+    log.add("Tax Paid Summary", f"{y_a}: all 12 months; {y_b}: first {months_prior} months")
     return ws
 
 
@@ -564,6 +582,55 @@ SECTIONS = {
 }
 
 
+def compact_consolidation(wb, file_rows):
+    """Re-layout tax sheets after summary/detail have consumed file subtotal rows."""
+    for tax, subtotal_rows in file_rows.items():
+        if not subtotal_rows:
+            continue
+        src = wb[tax]
+        width, last = src.max_column, max(subtotal_rows)
+        year_header = last + 3
+        if src.cell(year_header, 1).value != "Year":
+            raise ValueError(f"{tax}: expected year totals after monthly file subtotals")
+        years = [r for r in range(year_header + 1, src.max_row + 1)
+                 if src.cell(r, 1).value not in (None, "")]
+        target = wb.create_sheet(f"_compact_{tax}")
+        for col, dim in src.column_dimensions.items():
+            target.column_dimensions[col] = copy(dim)
+        def copy_row(source_row, destination_row):
+            for c in range(1, width + 1):
+                source = src.cell(source_row, c)
+                dest = target.cell(destination_row, c, source.value)
+                dest._style = source._style
+        copy_row(1, 1)
+        target["A1"] = "Grand Total"
+        for index, r in enumerate(years, 2):
+            copy_row(r, index)
+            target.cell(index, 1, f"Year {src.cell(r, 1).value}")
+        header_start = len(years) + 2
+        copy_row(2, header_start)
+        copy_row(3, header_start + 1)
+        shift = header_start - 2
+        for merged in src.merged_cells.ranges:
+            if 2 <= merged.min_row <= merged.max_row <= 3:
+                target.merge_cells(start_row=merged.min_row+shift, end_row=merged.max_row+shift,
+                                   start_column=merged.min_col, end_column=merged.max_col)
+        out = header_start + 2
+        excluded = set(subtotal_rows)
+        for r in range(4, last + 1):
+            if r not in excluded:
+                copy_row(r, out)
+                out += 1
+        target.freeze_panes = f"A{header_start + 2}"
+        for r in range(1, len(years) + 2):
+            for cell in target[r]:
+                cell.fill, cell.font = LBLUE, Font(name=FONT, size=10, bold=True)
+        position = wb.index(src)
+        del wb[tax]
+        target.title = tax
+        wb.move_sheet(target, offset=position - wb.index(target))
+
+
 # ---------------------------------------------------------------- driver
 def build_workbook(company_folder, months_prior=3, link_all=False):
     """Build every report in memory. Returns (workbook, log). Nothing is written to the company folder."""
@@ -601,6 +668,10 @@ def build_workbook(company_folder, months_prior=3, link_all=False):
         toi_wb = load_workbook(toi_file, data_only=True)
         toi = build_toi(wb, toi_wb, log)
         full = build_full_toi(wb, toi_wb, log)
+    file_rows = {}
+    if cons.MTR_INDEX in wb:
+        for tax, row in wb[cons.MTR_INDEX].iter_rows(min_row=2, max_col=2, values_only=True):
+            file_rows.setdefault(tax, []).append(int(row))
     build_mtr_detail(wb, root, log)
     company = None
     if info_file:
@@ -611,6 +682,8 @@ def build_workbook(company_folder, months_prior=3, link_all=False):
         build_adt_and_dashboard(wb, toi, company, log, link_all)
     else:
         log.add("Audit Dashboard", "Skipped: needs both TOI file and Company Info file")
+
+    compact_consolidation(wb, file_rows)
 
     lg = wb.create_sheet("Log")
     lg.append(("DateTime", "Where", "Message"))
@@ -646,7 +719,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Tax Audit Engine: build all reports")
     p.add_argument("company_folder", type=Path)
     p.add_argument("output", type=Path)
-    p.add_argument("--months", type=int, default=3, help="months of the earlier year (V5.1 default 3)")
+    p.add_argument("--months", type=int, default=3, help="months of the newest year; older year always includes 12 months (default 3)")
     p.add_argument("--link-all", action="store_true", help="also link ADT rows that V5.1 leaves blank")
     a = p.parse_args()
     for rec in build(a.company_folder, a.output, a.months, a.link_all):
