@@ -30,3 +30,16 @@ extraction. When updating an existing Mac installation, copy the new
 `input_tools.py` and dependency files as well, then run
 `bash Install_Update_Mac.command`. See UI_MAC_TEST.md for review requirements;
 PDF extraction does not automatically validate tax layouts or bank balances.
+
+### Download the five-file Mac update
+
+[Download Tax-Audit-Mac-Update.zip](https://github.com/PR7-KH/Tax-Audit-2027/raw/refs/heads/main/downloads/Tax-Audit-Mac-Update.zip)
+
+Unzip it and copy the five files inside `Tax-Audit-Mac-Update` into your existing
+app folder, replacing matching files. Keep your templates and company data.
+From Terminal in the app folder, run `bash Install_Update_Mac.command`, then
+launch normally. Back up your working folder first.
+
+For future updates, rebuild the ZIP with `python3 scripts/package_mac_update.py`
+after changing any of the five files, and commit the refreshed ZIP alongside
+the source changes.
