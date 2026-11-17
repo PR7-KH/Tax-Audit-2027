@@ -24,6 +24,7 @@ import source_check  # noqa: E402
 from input_tools import batch_convert_pdfs, organize_downloads
 from toi_pdf import export_toi_pdfs, parse_steps, toi_workbook_fonts
 from audit_tools_ui import AuditToolsPanel
+from heading_filter import FilterPopup
 
 NAVY, SIDE, SIDE_HOVER, ACCENT = "#101f35", "#14263f", "#203a58", "#087f8c"
 GREEN, BG, CARD, TEXT, MUTED = "#167459", "#f0f4f8", "#ffffff", "#172b43", "#61748b"
@@ -48,6 +49,10 @@ MENU = [
     ("item", "fin_AR", "A/R"),
     ("item", "fin_EXPENSE", "Expense"),
     ("item", "tax_risk", "Tax risk finding"),
+    ("group", "", "AUDIT ANALYSIS"),
+    ("item", "an_REVENUE", "Revenue"),
+    ("item", "an_EXPENSE", "Expense"),
+    ("item", "an_TOS", "TOS (salary tax)"),
     ("group", "", "SYSTEM"),
     ("item", "log", "Processing log"),
 ]
@@ -69,6 +74,14 @@ SUBTITLE = {
     "fin_BANK": "All bank statements in one aligned list, with a Type column that classifies each credit.",
     "tax_risk": "Total sales, cash-in and A/R, and expense compared across monthly tax, TOI, listing, GL, TB and bank, then the risk findings.",
     "log": "Warnings and corrections from the last build.",
+    "an_REVENUE": "Sales per SR monthly returns, sales listing, GL, TB and TOI: year, month, invoice and buyer comparisons.",
+    "an_EXPENSE": "Purchases per PR returns vs GL accounts payable, GL expense 5xxxx / 6xxxx vs TOI and TB, and TOS salary vs GL salary.",
+    "an_TOS": "Salary tax risk from the monthly TOS staff lists: foreign staff ≤ 4,000,000 KHR, missing months, leavers, Khmer missing months.",
+}
+ANALYSIS_BUILDERS = {
+    "an_REVENUE": ("revenue_expense", "build_revenue"),
+    "an_EXPENSE": ("revenue_expense", "build_expense"),
+    "an_TOS": ("tos_analysis", "build"),
 }
 EXPORT_NAME = {"mtr": "MTR_Overview"}
 
@@ -179,6 +192,8 @@ class App(tk.Tk):
         self.risk_reports = {}     # folder -> risk_view report (for export)
         self.cons_tables = {}      # consolidated sheet name -> finance_view.Table
         self.cons_state = {}
+        self.analyses = {}         # (company folder, an_ key) -> audit_analysis.Analysis
+        self.filter_popup = None
         self.setup_styles()
         self.build_header()
         self.build_body()
@@ -370,7 +385,7 @@ class App(tk.Tk):
         data_entry.bind("<Return>", lambda event: self.apply_data_filter())
         Btn(row2, "Filter", self.apply_data_filter, padx=8).pack(side="left", padx=2)
         Btn(row2, "Clear", self.clear_data_filter, color="#5d7391", padx=8).pack(side="left", padx=2)
-        tk.Label(row2, text="Pick a column, then a value from the list. Find searches all columns. Click a heading to sort. Numbers: >1000000  100..200",
+        tk.Label(row2, text="Tip: click any column heading to filter or sort it, like Excel.",
                  bg=BG, fg=MUTED).pack(side="left", padx=8)
         self.data_totals = tk.Label(self.data_controls, text="", bg="#e3f2ec", fg="#12533f", font=(FONT, 12, "bold"),
                                     anchor="w", justify="left", padx=10, pady=6, wraplength=1000)
@@ -483,6 +498,8 @@ class App(tk.Tk):
         self.risk_reports.clear()
         self.cons_tables.clear()
         self.cons_state = {}
+        self.__dict__.setdefault("analyses", {}).clear()
+        self.close_filter_popup()
 
     def refresh(self):
         if self.busy:
@@ -554,15 +571,17 @@ class App(tk.Tk):
         self.company_label.config(text=Path(self.folder.get()).name if self.folder.get() else "Select a company folder")
         if self.current and self.current.get("data"):
             self.decorate_data_headings()
+        elif self.current and self.current.get("key") == "consolidate" and self.cons_state.get("sheet") in self.cons_tables:
+            self.decorate_cons_headings()
 
     # ------------------------------------------------------------ finance data view (GL, Sales, Bank ...)
     def current_table(self):
         return self.data_tables.get((str(Path(self.folder.get())), (self.current or {}).get("key")))
 
-    def show_data(self, key):
+    def show_data(self, key, view=None):
         table = self.data_tables[(str(Path(self.folder.get())), key)]
-        self.current = {"key": key, "data": True}
-        self.data_state = {"page": 0, "sort": None, "indices": []}
+        self.current = {"key": key, "data": True, "view": view}
+        self.data_state = {"page": 0, "sort": None, "indices": [], "filters": {}}
         self.data_find.set("")
         self.data_month.set("All months")
         self.data_column.set(table.default_field() or "All columns")
@@ -572,7 +591,11 @@ class App(tk.Tk):
         self.source_controls.pack_forget()
         self.data_controls.pack(fill="x", before=self.picker, pady=3)
         self.btn_export.set_enabled(True)
-        self.set_picker([], "")
+        analysis = self.__dict__.get("analyses", {}).get((str(Path(self.folder.get())), key))
+        if analysis is not None:
+            self.set_picker(list(analysis.views), view, command=lambda n, k=key: self.show_analysis(k, n))
+        else:
+            self.set_picker([], "")
         self.apply_data_filter()
 
     def refresh_data_values(self):
@@ -598,7 +621,7 @@ class App(tk.Tk):
         value = self.data_choices.get(label) if label != "All" else None
         self.data_state["indices"] = table.view(
             self.data_find.get(), None, None if month == "All months" else month,
-            self.data_state.get("sort"), field, value)
+            self.data_state.get("sort"), field, value, self.data_state.get("filters"))
         self.data_state["page"] = 0
         self.render_data()
 
@@ -608,6 +631,7 @@ class App(tk.Tk):
         self.data_find.set("")
         self.data_month.set("All months")
         self.data_value.set("All")
+        self.data_state["filters"] = {}
         self.apply_data_filter()
 
     def sort_data(self, column):
@@ -625,17 +649,35 @@ class App(tk.Tk):
         pages = max(1, (len(indices) + size - 1) // size)
         page = max(0, min(self.data_state["page"], pages - 1))
         self.data_state["page"] = page
-        rows = [table.display(i) for i in indices[page * size:(page + 1) * size]]
-        self.draw(table.columns, rows)
+        shown = indices[page * size:(page + 1) * size]
+        rows = [table.display(i) for i in shown]
+        tags = None
+        if table.row_tags:
+            tags = [table.row_tags[i] if table.row_tags[i] in ("error", "warning", "total", "section") else ("odd" if n % 2 else "even")
+                    for n, i in enumerate(shown)]
+        fit = self.fit_columns
+        if getattr(table, "wide", False):
+            self.fit_columns = False     # many month columns: keep readable widths and scroll sideways
+        try:
+            self.draw(table.columns, rows, tags=tags)
+        finally:
+            self.fit_columns = fit
         self.page_label.config(text=f"Page {page + 1} / {pages}")
         label = next((m[2] for m in MENU if m[1] == self.current["key"]), "Data")
+        if self.current.get("view"):
+            label += " · " + self.current["view"]
         first = page * size + 1 if indices else 0
         text = f"{label}: rows {first:,}–{min(len(indices), (page + 1) * size):,} of {len(indices):,}"
         if len(indices) != len(table.rows):
             text += f" (filtered from {len(table.rows):,})"
-        self.data_totals.config(text="SUM of the filtered rows (all pages):   " + table.summary(indices))
+        active = table.filter_text(self.data_state.get("filters"))
+        self.data_totals.config(text="SUM of the filtered rows (all pages):   " + table.summary(indices)
+                                + (f"\nHeading filters → {active}" if active else ""))
         if table.notes:
             text += " · Skipped: " + "; ".join(table.notes[:2])
+        if getattr(table, "description", ""):
+            text += " · " + table.description
+        text += " · Click a column heading to filter or sort it (like Excel)."
         self.status(text)
 
     def decorate_data_headings(self):
@@ -643,9 +685,132 @@ class App(tk.Tk):
         if table is None:
             return
         sort = self.data_state.get("sort")
+        filters = self.data_state.get("filters") or {}
         for index, cid in enumerate(self.tree["columns"]):
-            arrow = (" ▼" if sort[1] else " ▲") if sort and sort[0] == index else ""
-            self.tree.heading(cid, text=table.columns[index] + arrow, command=lambda i=index: self.sort_data(i))
+            self.tree.heading(cid, text=self.heading_text(table.columns[index], index, sort, filters),
+                              command=lambda i=index: self.open_data_filter(i))
+
+    # ------------------------------------------------------------ Excel-style heading filters
+    @staticmethod
+    def heading_text(name, index, sort, filters):
+        arrow = (" ▼" if sort[1] else " ▲") if sort and sort[0] == index else ""
+        return ("⧩ " if filters.get(index) else "") + str(name) + arrow + "  ▾"
+
+    def close_filter_popup(self):
+        if self.__dict__.get("filter_popup") is not None:
+            try:
+                self.filter_popup.destroy()
+            except tk.TclError:
+                pass
+        self.filter_popup = None
+
+    def heading_position(self, index):
+        """Screen x, y just below the heading of column index."""
+        x = self.tree.winfo_rootx() - int(self.tree.xview()[0] * sum(self.tree.column(c, "width") for c in self.tree["columns"]))
+        for cid in list(self.tree["columns"])[:index]:
+            x += self.tree.column(cid, "width")
+        return x + 4, self.tree.winfo_rooty() + 30
+
+    def popup_filter(self, table, index, filters, base_indices, on_change, on_sort):
+        """Open the filter list for one column: values come from rows passing the other filters."""
+        if self.busy or table is None or index >= len(table.columns):
+            return
+        self.close_filter_popup()
+        others = table.apply_filters(base_indices, filters, skip=index)
+        values, complete = table.distinct(index, others)
+        spec = filters.get(index) or {}
+
+        def apply(values_set, text):
+            if values_set is None and not text:
+                filters.pop(index, None)
+            else:
+                filters[index] = {"values": values_set, "text": text}
+            on_change()
+
+        def clear():
+            filters.pop(index, None)
+            on_change()
+        x, y = self.heading_position(index)
+        self.filter_popup = FilterPopup(self, x, y, table.columns[index], values, spec.get("values"), spec.get("text", ""),
+                                        complete, on_apply=apply, on_sort=lambda desc: on_sort(index, desc), on_clear=clear)
+
+    def open_data_filter(self, index):
+        table = self.current_table()
+        if not (self.current or {}).get("data") or table is None:
+            return
+        filters = self.data_state.setdefault("filters", {})
+        column, month, label = self.data_column.get(), self.data_month.get(), self.data_value.get()
+        base = table.view(self.data_find.get(), None, None if month == "All months" else month, None,
+                          None if column == "All columns" else column,
+                          self.data_choices.get(label) if label != "All" else None)
+
+        def sort(i, desc):
+            self.data_state["sort"] = (i, desc)
+            self.apply_data_filter()
+        self.popup_filter(table, index, filters, base, self.apply_data_filter, sort)
+
+    def decorate_cons_headings(self):
+        table = self.cons_tables.get(self.cons_state.get("sheet"))
+        if table is None:
+            return
+        sort = self.cons_state.get("sort")
+        filters = self.cons_state.get("filters") or {}
+        for index, cid in enumerate(self.tree["columns"]):
+            if index >= len(table.columns):
+                break
+            current = self.tree.heading(cid, "text")
+            name = table.columns[index] if self.cons_state.get("indices") is not None else (current or table.columns[index])
+            name = name.replace("⧩ ", "").replace("  ▾", "").replace(" ▲", "").replace(" ▼", "")
+            self.tree.heading(cid, text=self.heading_text(name, index, sort, filters), command=lambda i=index: self.open_cons_filter(i))
+
+    def open_cons_filter(self, index):
+        table = self.cons_tables.get(self.cons_state.get("sheet"))
+        if table is None:
+            return
+        filters = self.cons_state.setdefault("filters", {})
+        column, label, month = self.cons_column.get(), self.cons_value.get(), self.cons_month.get()
+        base = table.view(month=None if month == "All months" else month,
+                          field=None if column == "All columns" else column,
+                          value=self.cons_choices.get(label) if label != "All" else None)
+
+        def sort(i, desc):
+            self.cons_state["sort"] = (i, desc)
+            self.apply_cons_filter()
+        self.popup_filter(table, index, filters, base, self.apply_cons_filter, sort)
+
+    # ------------------------------------------------------------ audit analysis (Revenue, Expense, TOS)
+    def job_analysis(self, key):
+        import importlib
+        module, fn = ANALYSIS_BUILDERS[key]
+        folder = str(Path(self.job_settings[0]))
+        analysis = getattr(importlib.import_module(module), fn)(folder)
+        return ("analysis", folder, key, analysis)
+
+    def show_analysis(self, key, view=None):
+        if self.busy:
+            return
+        folder = str(Path(self.folder.get()))
+        analysis = self.analyses.get((folder, key))
+        if analysis is None:
+            return
+        view = view if view in analysis.views else next(iter(analysis.views))
+        self.data_tables[(folder, key)] = analysis.views[view]
+        self.show_data(key, view)
+
+    def export_analysis(self):
+        import audit_analysis
+        key = (self.current or {}).get("key")
+        analysis = self.analyses.get((str(Path(self.folder.get())), key))
+        if analysis is None or self.busy:
+            return
+        company = Path(self.folder.get()).name
+        stem = company.replace(" ", "_")[:30]
+        path = filedialog.asksaveasfilename(
+            title=f"Export {analysis.title} to Excel", defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")],
+            initialdir=str(Path.home() / "Documents"),
+            initialfile=f"{stem}_{analysis.key.title()}_Analysis{('_' + analysis.period.split(' ')[-1]) if analysis.period else ''}.xlsx")
+        if path:
+            self.run_bg(lambda: (audit_analysis.save_workbook(analysis, path, company), ("exported", path))[1])
 
     def export_data(self):
         table = self.current_table()
@@ -788,15 +953,27 @@ class App(tk.Tk):
         hint=" Click a file name in column B to open its source workbook." if name.startswith("MTR_") else ""
         self.status(f"{name}: rows {page*self.page_size+1:,}–{min(total,(page+1)*self.page_size):,} of {total:,}. All rows available using Next / Previous."+hint)
 
-    def set_picker(self, names, active):
+    def set_picker(self, names, active, command=None):
         for w in self.picker.winfo_children():
             w.destroy()
         if len(names) < 2:
             return
+        command = command or self.show_sheet
+        row = tk.Frame(self.picker, bg=BG)
+        row.pack(fill="x")
+        width = max(600, self.main_panel.winfo_width() - 20)
+        used = 0
         for n in names:
-            b = Btn(self.picker, "TOI compare" if n == "TOI" else n, lambda n=n: self.show_sheet(n), color=ACCENT if n == active else "#9fb2cc",
-                    hover=NAVY, padx=12, pady=4)
+            text = "TOI compare" if n == "TOI" else n
+            need = len(text) * 8 + 36
+            if used and used + need > width:   # wrap long view lists onto a second line
+                row = tk.Frame(self.picker, bg=BG)
+                row.pack(fill="x", pady=(3, 0))
+                used = 0
+            b = Btn(row, text, lambda n=n: command(n), color=ACCENT if n == active else "#9fb2cc",
+                    hover=NAVY, padx=10 if command is not self.show_sheet else 12, pady=4)
             b.pack(side="left", padx=(0, 6))
+            used += need
 
     def show_sheet(self, name):
         if self.busy:
@@ -1073,6 +1250,7 @@ class App(tk.Tk):
         if key == "tps":
             self.tax_options.pack(fill="x", before=self.picker, pady=4)
         self.btn_export.set_enabled(key in engine.SECTIONS or key == "tax_risk")
+        self.close_filter_popup()
         if key == "audit_tools":
             self.set_picker([],"");self.preview_card.pack_forget()
             if self.audit_panel is None:self.audit_panel=AuditToolsPanel(self.main_panel,self)
@@ -1093,6 +1271,12 @@ class App(tk.Tk):
                 self.q.put(self.risk_cache[folder])
             else:
                 self.run_bg(self.job_tax_risk)
+            return
+        if key.startswith("an_"):
+            if (folder, key) in self.analyses:
+                self.show_analysis(key)
+            else:
+                self.run_bg(self.job_analysis, key)
             return
         if key.startswith("fin_"):
             if (folder, key) in self.data_tables:
@@ -1201,7 +1385,7 @@ class App(tk.Tk):
             return
         if not self.cons_controls.winfo_manager():
             self.cons_controls.pack(fill="x", before=self.picker, pady=(2, 3))
-        self.cons_state = {"sheet": name, "indices": None, "page": 0}
+        self.cons_state = {"sheet": name, "indices": None, "page": 0, "filters": {}, "sort": None}
         self.cons_column.set("All columns")
         self.cons_value.set("All")
         self.cons_month.set("All months")
@@ -1231,13 +1415,15 @@ class App(tk.Tk):
             return
         column, label, month = self.cons_column.get(), self.cons_value.get(), self.cons_month.get()
         value = self.cons_choices.get(label) if label != "All" else None
-        if value is None and month == "All months":
+        filters = self.cons_state.get("filters") or {}
+        sort = self.cons_state.get("sort")
+        if value is None and month == "All months" and not filters and not sort:
             self.cons_state.update(indices=None, page=0)
             self.cons_sum.config(text="Σ " + table.summary(range(len(table.rows)), compact=True))
             self.show_sheet(name)
             return
-        indices = table.view(month=None if month == "All months" else month,
-                             field=None if column == "All columns" else column, value=value)
+        indices = table.view(month=None if month == "All months" else month, sort=sort,
+                             field=None if column == "All columns" else column, value=value, filters=filters)
         self.cons_state.update(indices=indices, page=0)
         self.render_cons()
 
@@ -1256,7 +1442,8 @@ class App(tk.Tk):
         rows = [table.display(i) for i in indices[page * size:(page + 1) * size]]
         self.draw(table.columns, rows, tags=["odd" if n % 2 else "even" for n in range(len(rows))])
         self.page_label.config(text=f"Page {page + 1} / {pages}")
-        self.cons_sum.config(text="Σ filtered: " + table.summary(indices, compact=True))
+        active = table.filter_text(self.cons_state.get("filters"))
+        self.cons_sum.config(text="Σ filtered: " + table.summary(indices, compact=True) + (f"  ·  ⧩ {active}" if active else ""))
         self.status(f"{self.cons_state['sheet']}: {len(indices):,} of {len(table.rows):,} rows match the filter. Clear shows the full sheet with its totals.")
 
     # ------------------------------------------------------------ background jobs (no Tk calls here)
@@ -1352,7 +1539,18 @@ class App(tk.Tk):
             rows.append([mark.READY, "Tax risk finding", f"{report['year']}: {len(report['findings'])} findings, {high} High" if report else "Ready"])
         except Exception as exc:
             rows.append([mark.BAD, "Tax risk finding", "Not built: " + (str(exc).splitlines()[0] if str(exc) else type(exc).__name__)])
-        return ("built_all", res, pages, risk, rows)
+        analyses = []
+        for key in ANALYSIS_BUILDERS:
+            label = next(m[2] for m in MENU if m[1] == key)
+            try:
+                _kind, afolder, _key, analysis = self.job_analysis(key)
+                analyses.append((afolder, key, analysis))
+                ready = not all(t == "error" for t in (analysis.views["Summary"].row_tags or [])) if "Summary" in analysis.views else False
+                rows.append([mark.READY if ready else mark.NOTE, f"Analysis: {label}", analysis.headline()
+                             + (" · " + analysis.notes[0] if analysis.notes else "")])
+            except Exception as exc:
+                rows.append([mark.BAD, f"Analysis: {label}", "Not built: " + (str(exc).splitlines()[0] if str(exc) else type(exc).__name__)])
+        return ("built_all", res, pages, risk, rows, analyses)
 
     # ------------------------------------------------------------ queue results -> screen
     def poll(self):
@@ -1405,7 +1603,9 @@ class App(tk.Tk):
                     elif key and key.startswith("fin_") and res["folder"] == str(Path(self.folder.get())):
                         self.open_report(key)
                 elif kind == "built_all":
-                    _k, res, pages, risk, rows = msg
+                    _k, res, pages, risk, rows, analyses = msg
+                    for afolder, akey, analysis in analyses:
+                        self.analyses[(afolder, akey)] = analysis
                     self.inspection = res
                     for fkey, table in res["tables"].items():
                         self.data_tables[(res["folder"], "fin_" + fkey)] = table
@@ -1416,6 +1616,14 @@ class App(tk.Tk):
                               tags=[source_check.TAG.get(r[0], "even") for r in rows])
                     self.status("Build all data finished. Every menu on the left now opens without waiting.")
                     self.notify_build_done()
+                elif kind == "analysis":
+                    _k, folder, key, analysis = msg
+                    self.analyses[(folder, key)] = analysis
+                    if (self.current or {}).get("key") == key and folder == str(Path(self.folder.get())):
+                        self.show_analysis(key)
+                        self.status(analysis.headline() + ". Pick a view above; click a column heading to filter. "
+                                    "Export this report saves every view to Excel." +
+                                    (" Notes: " + "; ".join(analysis.notes[:2]) if analysis.notes else ""))
                 elif kind == "search":
                     self.search_hits = msg[1]
                     self.search_index = -1
@@ -1474,6 +1682,9 @@ class App(tk.Tk):
         self.run_bg(job)
 
     def export_this(self):
+        if str((self.current or {}).get("key") or "").startswith("an_"):
+            self.export_analysis()
+            return
         if (self.current or {}).get("data"):
             self.export_data()
             return

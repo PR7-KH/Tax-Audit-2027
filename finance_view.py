@@ -116,6 +116,7 @@ def month_key(v):
 class Table:
     def __init__(self, columns, rows, notes=None):
         self.columns, self.rows, self.notes = columns, rows, notes or []
+        self.row_tags = None       # optional colour tag per row (analysis views)
         low = [c.lower() for c in columns]
         self.date_col = next((i for i, c in enumerate(columns) if c == "Date" or low[i] == "date"), None)
         if self.date_col is None:
@@ -158,10 +159,88 @@ class Table:
         return {"": lambda v: v == a, "=": lambda v: v == a, ">": lambda v: v > a, "<": lambda v: v < a,
                 ">=": lambda v: v >= a, "<=": lambda v: v <= a}[op or ""]
 
-    def view(self, find="", column=None, month=None, sort=None, field=None, value=None):
+    # ---- Excel-style heading filters: {column index: {"values": set of value keys or None, "text": str}}
+    BLANK = "(Blanks)"
+
+    def value_key(self, i, c):
+        """Text a heading filter matches on: the value as shown in the table, (Blanks) for empty cells."""
+        v = self.rows[i][c]
+        if v in (None, ""):
+            return self.BLANK
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and c in self.money:
+            return f"{v:,.2f}" if isinstance(v, float) and v != int(v) else f"{int(v):,}"
+        return str(v)
+
+    def _filter_test(self, c, spec):
+        values, text = spec.get("values"), (spec.get("text") or "").strip()
+        tests = []
+        if values is not None:
+            values = set(values)
+            tests.append(lambda i: self.value_key(i, c) in values)
+        if text:
+            num = self._numeric_test(text)
+            op_given = bool(re.match(r"^\s*(>=|<=|>|<|=)", text) or ".." in text)
+            if num and (op_given or c in self.money):
+                tests.append(lambda i: isinstance(self.rows[i][c], (int, float)) and not isinstance(self.rows[i][c], bool)
+                             and num(self.rows[i][c]))
+            else:
+                words = text.casefold().split()
+                texts = self._texts()
+                tests.append(lambda i: all(w in texts[i][c] for w in words))
+        return lambda i: all(t(i) for t in tests)
+
+    def apply_filters(self, idx, filters, skip=None):
+        for c, spec in (filters or {}).items():
+            if c == skip or c >= len(self.columns) or not spec:
+                continue
+            test = self._filter_test(c, spec)
+            idx = [i for i in idx if test(i)]
+        return list(idx)
+
+    MAX_FILTER_VALUES = 5000
+
+    def distinct(self, c, idx):
+        """[(value key, row count)] of one column over rows idx, sorted like Excel (numbers, text, blanks).
+        Returns (values, complete); complete is False when the column has too many different values."""
+        counts = defaultdict(int)
+        raw = {}
+        for i in idx:
+            k = self.value_key(i, c)
+            counts[k] += 1
+            raw.setdefault(k, self.rows[i][c])
+        def order(k):
+            v = raw[k]
+            if k == self.BLANK:
+                return (3, 0, "")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                return (0, v, "")
+            return (1, 0, str(v).casefold())
+        keys = sorted(counts, key=order)
+        complete = len(keys) <= self.MAX_FILTER_VALUES
+        return [(k, counts[k]) for k in keys[:self.MAX_FILTER_VALUES]], complete
+
+    def filter_text(self, filters):
+        """Short description of the active heading filters, for the totals bar."""
+        parts = []
+        for c, spec in sorted((filters or {}).items()):
+            if not spec or c >= len(self.columns):
+                continue
+            bits = []
+            if spec.get("values") is not None:
+                vals = sorted(spec["values"])
+                bits.append(" / ".join(vals[:3]) + (f" +{len(vals) - 3} more" if len(vals) > 3 else ""))
+            if spec.get("text"):
+                bits.append(f"contains '{spec['text']}'" if not self._numeric_test(spec["text"]) else spec["text"])
+            parts.append(f"{self.columns[c]}: " + ", ".join(bits))
+        return "; ".join(parts)
+
+    def view(self, find="", column=None, month=None, sort=None, field=None, value=None, filters=None):
         """Row indexes after filtering and sorting. column: heading text or None for all columns.
-        find: words (all must appear) or, for number columns, >1000000  <=500  100..200  1,234."""
+        find: words (all must appear) or, for number columns, >1000000  <=500  100..200  1,234.
+        filters: Excel-style heading filters, see apply_filters."""
         idx = range(len(self.rows))
+        if filters:
+            idx = self.apply_filters(idx, filters)
         col = self.columns.index(column) if column in self.columns else None
         if field in self.columns and value not in (None, ""):
             fc = self.columns.index(field)
@@ -256,6 +335,7 @@ class Table:
                     groups[cur][self.columns[c]] += v
         for cur, cols in sorted(groups.items()):
             tag = f" {cur}" if cur else ""
+            cols = dict(sorted(cols.items(), key=lambda kv: self.columns.index(kv[0]) if kv[0] in self.columns else 0))
             shown = [(n, v) for n, v in cols.items() if v] if compact else list(cols.items())
             items = [f"{name}{tag}: {self.money_text(v)}" for name, v in shown[:4 if compact else None]]
             if compact and len(shown) > 4:
@@ -270,11 +350,25 @@ class Table:
         return "   |   ".join(parts)
 
     def export(self, path, idx):
-        wb = Workbook(write_only=True)
-        ws = wb.create_sheet("Filtered data")
+        from openpyxl.styles import Font, PatternFill
+        from openpyxl.utils import get_column_letter
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Filtered data"
         ws.append(self.columns)
-        for i in idx:
+        for c in ws[1]:
+            c.font, c.fill = Font(bold=True), PatternFill("solid", fgColor="BDD7EE")
+        n = 0
+        for n, i in enumerate(idx, start=1):
             ws.append(self.rows[i])
+        for c in self.money:
+            for (cell,) in ws.iter_rows(min_row=2, min_col=c + 1, max_col=c + 1):
+                cell.number_format = "#,##0.00;(#,##0.00);-"
+        if self.columns:
+            ws.auto_filter.ref = f"A1:{get_column_letter(len(self.columns))}{max(1, n + 1)}"  # Excel filter buttons on the headings
+            ws.freeze_panes = "A2"
+            for c, name in enumerate(self.columns, start=1):
+                ws.column_dimensions[get_column_letter(c)].width = max(10, min(45, len(str(name)) + 4))
         wb.save(path)
 
 

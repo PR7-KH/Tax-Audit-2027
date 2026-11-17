@@ -59,7 +59,7 @@ row). Raw extractions stay under `.pdf-extractions` with source-hash history in
 `.tax-audit-conversions.json`; when the PDF holds a real table, a standard Excel with the
 **same name as the PDF** is saved next to it and the row turns ✓. See "Source inspect" below.
 
-The update bundle includes nineteen files, including the Tax Audit Tools/search
+The update bundle includes twenty-three files, including the Tax Audit Tools/search
 modules, `assets/meeting_note_template.docx` and `assets/tax_laws.json`.
 Copy the **assets folder** too, and rerun
 the Mac installer to install python-docx. Selecting a new
@@ -194,3 +194,39 @@ rows and total are flagged ⚠ so totals are not doubled.
 **Consolidated data** now has a small filter row under the search box: Column → Value,
 Month, Clear, and a Σ total of the matching rows. Clear returns to the full sheet with its
 grand and year totals.
+
+### Excel-style heading filters
+
+In every data view (Sales, General ledger, Bank, Trial balance, A/R, Expense, Consolidated data and
+the Audit analysis views) **click a column heading** to open a filter list, like Excel's AutoFilter:
+sort A→Z / Z→A, clear the column's filter, search, and tick or untick values (each with its row
+count). The search box also takes number conditions: `>1000000`, `<=4000000`, `100..200`. Filters on
+several columns combine; a filtered heading shows ⧩, and the green SUM bar lists the active filters.
+**Clear** removes all filters. Exported Excel files keep filter buttons on their headings.
+
+### Audit analysis: Revenue, Expense, TOS (salary tax)
+
+A new **AUDIT ANALYSIS** group sits below Financial audit. Each menu opens a set of views (buttons
+above the table); **Export this report** saves every view to one formatted Excel workbook with
+filter buttons and a SUBTOTAL row that follows the Excel filter. Build all data prepares them too.
+
+* **Revenue**: SR monthly returns vs sales listing vs GL sales accounts vs TB vs TOI (B0) for the
+  year; month-by-month comparison; invoice match SR ↔ sales listing (only in SR, only in listing,
+  amount differs); sales by buyer; SR invoice lines; GL sales lines.
+* **Expense**: PR purchases vs GL accounts-payable credits; GL 5xxxx / 6xxxx vs TOI (B4–B6, B22) and
+  TB; salary per TOS vs GL salary / wage / payroll accounts; monthly comparison; expense by GL
+  account; PR purchases by supplier (flags suppliers not found in GL and missing TIN); PR lines.
+* **TOS (salary tax)**: reads every monthly TOS staff list (TOS/<year>/*.xlsx, month from the file
+  name such as `TOS_03_2025.xlsx`). Staff are matched by **ID** (by name when the ID is blank).
+  Columns are found by heading text (Khmer or English); check **Column mapping** first.
+  1. **Foreign staff ≤ 4,000,000 KHR (≈ USD 1,000)**: each month, and one line per person.
+  2. **Foreign missing months**: declared, then absent, then declared again (e.g. Jan, Feb, —, Apr).
+  3. **Foreign left / joined**: last declared before the newest month on file → request the
+     resignation letter for the month after; joiners → request contract and work permit.
+     **Monthly headcount** shows staff, Khmer, foreign, joined, left and change each month.
+  4. **Khmer missing months**: gaps only; Khmer leavers are not listed.
+  Also: **Staff × month** grid (salary per month, MISSING for gaps), **Data checks** (declared twice
+  in a month, same ID with different names, same name with different IDs, blank ID / nationality)
+  and **All declarations**. Nationality containing Khmer / ខ្មែរ / Cambodia counts as Khmer; a
+  blank nationality is checked with foreign staff. A month with no TOS file at all is reported once
+  and is not counted as a staff member's missing month.
