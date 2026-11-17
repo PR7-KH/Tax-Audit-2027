@@ -59,7 +59,7 @@ row). Raw extractions stay under `.pdf-extractions` with source-hash history in
 `.tax-audit-conversions.json`; when the PDF holds a real table, a standard Excel with the
 **same name as the PDF** is saved next to it and the row turns ✓. See "Source inspect" below.
 
-The update bundle includes twenty-three files, including the Tax Audit Tools/search
+The update bundle includes twenty-four files, including the Tax Audit Tools/search
 modules, `assets/meeting_note_template.docx` and `assets/tax_laws.json`.
 Copy the **assets folder** too, and rerun
 the Mac installer to install python-docx. Selecting a new
@@ -203,8 +203,11 @@ sort A→Z / Z→A, clear the column's filter, search, and tick or untick values
 count). The search box also takes number conditions: `>1000000`, `<=4000000`, `100..200`. Filters on
 several columns combine; a filtered heading shows ⧩, and the green SUM bar lists the active filters.
 **Clear** removes all filters. Exported Excel files keep filter buttons on their headings.
+In **Consolidated data** the old search box and Filter / Value / Month boxes are gone: filter on the
+headings, read the totals in the green **Σ TOTAL** line, and press **⟲ Reset view** to clear every
+filter and sort and return to the full sheet with its grand and year totals.
 
-### Audit analysis: Revenue, Expense, TOS (salary tax)
+### Audit analysis: Revenue, Expense, TOS (salary tax), WHT (withholding tax)
 
 A new **AUDIT ANALYSIS** group sits below Financial audit. Each menu opens a set of views (buttons
 above the table); **Export this report** saves every view to one formatted Excel workbook with
@@ -230,3 +233,15 @@ filter buttons and a SUBTOTAL row that follows the Excel filter. Build all data 
   and **All declarations**. Nationality containing Khmer / ខ្មែរ / Cambodia counts as Khmer; a
   blank nationality is checked with foreign staff. A month with no TOS file at all is reported once
   and is not counted as a staff member's missing month.
+* **WHT (withholding tax)**: reads every monthly PR and WHT return. Each PR line is classified:
+  imports, lines with VAT (VAT-registered supplier), goods / materials, fixed assets and utilities
+  are excluded; services, fees, rental, interest and royalty from non-VAT suppliers are WHT-type;
+  non-VAT lines whose nature cannot be told are **Unclear** (check the invoice). WHT-type purchases
+  are grouped by supplier and month and matched with the WHT return of the same month (or the
+  next month, when paid later) by TIN, else by name; each WHT line is used only once. Declared
+  items go to **Declared OK**; only **Not declared** / **Partly declared** items are raised in
+  **WHT risk** with the estimated WHT (rental 10 %, services / fees / unclear 15 %; confirm
+  non-resident 14 %). Also: **Monthly summary**, **Recurring not declared** (same supplier in many
+  months, e.g. a landlord), **WHT not in PR**, **PR lines classified** (why each line is or is not
+  WHT-type), **WHT declarations** and **Column mapping** (check this first). The nature comes from a
+  description column (បរិយាយ / Description) and the supplier name; without them more lines are Unclear.

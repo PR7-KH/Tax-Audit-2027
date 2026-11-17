@@ -53,6 +53,7 @@ MENU = [
     ("item", "an_REVENUE", "Revenue"),
     ("item", "an_EXPENSE", "Expense"),
     ("item", "an_TOS", "TOS (salary tax)"),
+    ("item", "an_WHT", "WHT (withholding tax)"),
     ("group", "", "SYSTEM"),
     ("item", "log", "Processing log"),
 ]
@@ -76,12 +77,14 @@ SUBTITLE = {
     "log": "Warnings and corrections from the last build.",
     "an_REVENUE": "Sales per SR monthly returns, sales listing, GL, TB and TOI: year, month, invoice and buyer comparisons.",
     "an_EXPENSE": "Purchases per PR returns vs GL accounts payable, GL expense 5xxxx / 6xxxx vs TOI and TB, and TOS salary vs GL salary.",
+    "an_WHT": "Services, rental and fees bought from non-VAT suppliers in PR, matched with the WHT return of that month; only what is not declared is raised.",
     "an_TOS": "Salary tax risk from the monthly TOS staff lists: foreign staff ≤ 4,000,000 KHR, missing months, leavers, Khmer missing months.",
 }
 ANALYSIS_BUILDERS = {
     "an_REVENUE": ("revenue_expense", "build_revenue"),
     "an_EXPENSE": ("revenue_expense", "build_expense"),
     "an_TOS": ("tos_analysis", "build"),
+    "an_WHT": ("wht_analysis", "build"),
 }
 EXPORT_NAME = {"mtr": "MTR_Overview"}
 
@@ -345,19 +348,15 @@ class App(tk.Tk):
         self.cons_controls = tk.Frame(main, bg=BG)
         self.cons_column, self.cons_value, self.cons_month = tk.StringVar(value="All columns"), tk.StringVar(value="All"), tk.StringVar(value="All months")
         self.cons_choices = {}
-        tk.Label(self.cons_controls, text="Filter", bg=BG, fg=TEXT, font=small).pack(side="left")
+        # Filtering is done on the column headings (Excel style); these boxes stay unpacked.
         self.cons_column_box = ttk.Combobox(self.cons_controls, textvariable=self.cons_column, state="readonly", width=18, font=small)
-        self.cons_column_box.pack(side="left", padx=3)
-        self.cons_column_box.bind("<<ComboboxSelected>>", lambda event: self.cons_column_changed())
         self.cons_value_box = ttk.Combobox(self.cons_controls, textvariable=self.cons_value, state="disabled", width=24, font=small)
-        self.cons_value_box.pack(side="left", padx=3)
-        self.cons_value_box.bind("<<ComboboxSelected>>", lambda event: self.apply_cons_filter())
         self.cons_month_box = ttk.Combobox(self.cons_controls, textvariable=self.cons_month, state="readonly", width=10, font=small)
-        self.cons_month_box.pack(side="left", padx=3)
-        self.cons_month_box.bind("<<ComboboxSelected>>", lambda event: self.apply_cons_filter())
-        Btn(self.cons_controls, "Clear", self.clear_cons_filter, color="#5d7391", padx=6, pady=2).pack(side="left", padx=3)
-        self.cons_sum = tk.Label(self.cons_controls, text="", bg=BG, fg="#12533f", font=(FONT, 10, "bold"), anchor="w", justify="left", wraplength=700)
-        self.cons_sum.pack(side="left", fill="x", expand=True, padx=6)
+        Btn(self.cons_controls, "⟲  Reset view", self.clear_cons_filter, color="#5d7391", padx=10, pady=6).pack(side="left", padx=(0, 6))
+        self.cons_sum = tk.Label(self.cons_controls, text="", bg="#e3f2ec", fg="#12533f", font=(FONT, 12, "bold"), anchor="w",
+                                 justify="left", padx=10, pady=6, wraplength=1000)
+        self.cons_sum.pack(side="left", fill="x", expand=True)
+        self.cons_sum.bind("<Configure>", lambda event: self.cons_sum.configure(wraplength=max(300, event.width - 20)))
 
         self.data_controls = tk.Frame(main, bg=BG)
         self.data_find, self.data_month = tk.StringVar(), tk.StringVar(value="All months")
@@ -1237,7 +1236,6 @@ class App(tk.Tk):
         self.search_hits = []
         self.search_label.config(text="")
         if key == "consolidate":
-            self.search_controls.pack(fill="x", before=self.picker, pady=(3, 0))
             self.cons_controls.pack(fill="x", before=self.picker, pady=(2, 3))
         if key == "sources":
             self.source_controls.pack(fill="x", before=self.picker, pady=3)
@@ -1393,7 +1391,7 @@ class App(tk.Tk):
         self.cons_column_box.config(values=["All columns"] + table.columns[1:])
         self.cons_value_box.config(values=["All"], state="disabled")
         self.cons_month_box.config(values=["All months"] + table.months)
-        self.cons_sum.config(text="Σ " + table.summary(range(len(table.rows)), compact=True))
+        self.cons_sum.config(text="Σ TOTAL, all rows:   " + table.summary(range(len(table.rows)), compact=True))
 
     def cons_column_changed(self):
         table = self.cons_tables.get(self.cons_state.get("sheet"))
@@ -1419,7 +1417,7 @@ class App(tk.Tk):
         sort = self.cons_state.get("sort")
         if value is None and month == "All months" and not filters and not sort:
             self.cons_state.update(indices=None, page=0)
-            self.cons_sum.config(text="Σ " + table.summary(range(len(table.rows)), compact=True))
+            self.cons_sum.config(text="Σ TOTAL, all rows:   " + table.summary(range(len(table.rows)), compact=True))
             self.show_sheet(name)
             return
         indices = table.view(month=None if month == "All months" else month, sort=sort,
@@ -1443,8 +1441,8 @@ class App(tk.Tk):
         self.draw(table.columns, rows, tags=["odd" if n % 2 else "even" for n in range(len(rows))])
         self.page_label.config(text=f"Page {page + 1} / {pages}")
         active = table.filter_text(self.cons_state.get("filters"))
-        self.cons_sum.config(text="Σ filtered: " + table.summary(indices, compact=True) + (f"  ·  ⧩ {active}" if active else ""))
-        self.status(f"{self.cons_state['sheet']}: {len(indices):,} of {len(table.rows):,} rows match the filter. Clear shows the full sheet with its totals.")
+        self.cons_sum.config(text="Σ TOTAL, filtered rows:   " + table.summary(indices, compact=True) + (f"\n⧩ Filters → {active}" if active else ""))
+        self.status(f"{self.cons_state['sheet']}: {len(indices):,} of {len(table.rows):,} rows match. Reset view returns to the full sheet with its totals.")
 
     # ------------------------------------------------------------ background jobs (no Tk calls here)
     def ensure_built(self, summary_only=False):

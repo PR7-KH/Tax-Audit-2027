@@ -13,6 +13,7 @@ FILES = (
     'audit_analysis.py',
     'tos_analysis.py',
     'revenue_expense.py',
+    'wht_analysis.py',
     'source_check.py',
     'input_tools.py',
     'toi_pdf.py',

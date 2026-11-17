@@ -197,3 +197,82 @@ class RevenueExpenseTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------- WHT
+PR_HEAD = ["ល.រ", "កាលបរិច្ឆេទ", "លេខវិក្កយបត្រ", "ប្រភេទអ្នកផ្គត់ផ្គង់", "លេខអត្តសញ្ញាណកម្មសារពើពន្ធ", "ឈ្មោះអ្នកផ្គត់ផ្គង់",
+           "តម្លៃសរុបលើវិក្កយបត្រ", "ការទិញមិនជាប់អាករ", "តម្លៃនាំចូលជាប់អាករ", "អាករនាំចូល", "ការទិញក្នុងស្រុកជាប់អាករ",
+           "អាករលើការទិញក្នុងស្រុក", "M", "N", "O", "បរិយាយ"]
+WHT_HEAD = ["ល.រ", "កាលបរិច្ឆេទ", "លេខអត្តសញ្ញាណកម្ម", "ឈ្មោះអ្នកទទួល", "ប្រភេទប្រាក់ចំណូល", "អត្រា", "G", "H", "I",
+            "ទឹកប្រាក់ត្រូវបើក", "ប្រាក់ពន្ធកាត់ទុក"]
+
+
+def make_pr_wht(root):
+    for m in range(1, 13):
+        lines = [("Individual", "", "SOK LANDLORD", 4_000_000, 0, 0, 0, "Office rental"),
+                 ("Individual", "", "CHEA CLEANING", 800_000, 0, 0, 0, "Cleaning service"),
+                 ("VAT", "K001-123", "ABC SUPPLY CO., LTD", 11_000_000, 0, 10_000_000, 1_000_000, "Raw material"),
+                 ("Individual", "", "MARKET SELLER", 500_000, 0, 0, 0, "Goods: fabric"),
+                 ("Overseas", "", "CHINA MACHINE", 20_000_000, 20_000_000, 0, 0, "Import machine")]
+        if m == 4:
+            lines.append(("Individual", "", "DARA", 2_000_000, 0, 0, 0, ""))
+        for kind in ("PR", "WHT"):
+            d = root / kind / "2025"
+            d.mkdir(parents=True, exist_ok=True)
+            wb = Workbook(); ws = wb.active
+            ws.append([kind]); ws.append(PR_HEAD if kind == "PR" else WHT_HEAD); ws.append([None]); ws.append([None])
+            if kind == "PR":
+                for n, (t, tin, name, tot, imp, lv, lvat, desc) in enumerate(lines, 1):
+                    ws.append([n, f"2025-{m:02d}-15", f"INV{m}{n}", t, tin, name, tot, tot if not (imp or lv) else 0,
+                               imp, 0, lv, lvat, 0, 0, 0, desc])
+            else:
+                if m != 6:
+                    ws.append([1, f"2025-{m:02d}-28", "", "SOK LANDLORD", "Rental", "10%", None, None, None, 4_000_000, 400_000])
+                if m == 2:
+                    ws.append([2, "2025-02-28", "", "UNKNOWN PAYEE", "Service", "15%", None, None, None, 1_000_000, 150_000])
+            wb.save(d / f"{kind}_{m:02d}_2025.xlsx")
+
+
+class WhtAnalysisTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import wht_analysis
+        cls.tmp = tempfile.TemporaryDirectory()
+        make_pr_wht(Path(cls.tmp.name))
+        cls.an = wht_analysis.build(cls.tmp.name)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def rows(self, view):
+        t = self.an.views[view]
+        return [dict(zip(t.columns, r)) for r in t.rows]
+
+    def test_classification(self):
+        nature = {r["Supplier"]: r["Nature"] for r in self.rows("PR lines classified")}
+        self.assertEqual(nature["SOK LANDLORD"], "Rental")
+        self.assertEqual(nature["CHEA CLEANING"], "Service / fee")
+        self.assertEqual(nature["ABC SUPPLY CO., LTD"], "Excluded: VAT invoice")
+        self.assertEqual(nature["MARKET SELLER"], "Excluded: goods / material")
+        self.assertEqual(nature["CHINA MACHINE"], "Excluded: import")
+        self.assertEqual(nature["DARA"], "Unclear")
+
+    def test_declared_months_are_ok_and_only_gaps_are_raised(self):
+        ok = {(r["Month"], r["Supplier"]) for r in self.rows("Declared OK")}
+        self.assertEqual(len(ok), 11)
+        self.assertNotIn(("2025-06", "SOK LANDLORD"), ok)          # July's WHT line is not used twice
+        risk = self.rows("WHT risk")
+        rent = [r for r in risk if r["Supplier"] == "SOK LANDLORD"]
+        self.assertEqual([(r["Month"], r["Estimated WHT at risk"]) for r in rent], [("2025-06", 400_000)])
+        self.assertEqual(sum(r["Supplier"] == "CHEA CLEANING" for r in risk), 12)
+        unclear = [r for r in risk if r["Supplier"] == "DARA"][0]
+        self.assertIn("Check the invoice", unclear["Suggested action"])
+        self.assertEqual(self.an.views["WHT risk"].row_tags[-1], "warning")   # unclear sorted last, amber
+
+    def test_recurring_and_orphans(self):
+        rec = {r["Supplier"]: r for r in self.rows("Recurring not declared")}
+        self.assertEqual(rec["CHEA CLEANING"]["Months"], 12)
+        self.assertEqual([r["Payee"] for r in self.rows("WHT not in PR")], ["UNKNOWN PAYEE"])
+        total = [r for r in self.rows("Summary") if r["Area"] == "Total estimated WHT at risk"][0]
+        self.assertEqual(total["Amount (KHR)"], 400_000 + 12 * 120_000 + 300_000)
