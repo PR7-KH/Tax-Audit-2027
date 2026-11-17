@@ -23,6 +23,7 @@ class PreviewTests(unittest.TestCase):
         app.sheet_pages = {}
         app.sheet_dimensions = {}
         app.busy = False
+        app.cons_tables = {}
         return app
 
     def test_inventory_counts_without_opening_workbooks(self):
@@ -37,7 +38,8 @@ class PreviewTests(unittest.TestCase):
             (root / 'GL').mkdir()
             (root / 'GL' / 'ledger.xlsx').touch()
             with patch.object(ui.engine, 'load_workbook', side_effect=AssertionError('must not open')):
-                rows = ui.source_inventory(root)
+                from input_tools import source_inventory
+                rows = source_inventory(root)
             self.assertIn(['PR', '2025', 12, 'Found; content not validated'], [r[:4] for r in rows])
             self.assertIn(['PR', '2026', 13, 'Found; content not validated'], [r[:4] for r in rows])
             self.assertIn(['General ledger', 'All', 1, 'Found; content not validated'], [r[:4] for r in rows])

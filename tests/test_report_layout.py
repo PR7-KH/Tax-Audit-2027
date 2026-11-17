@@ -135,10 +135,11 @@ class ReportLayoutTests(unittest.TestCase):
             directory=Path(folder)/'GL'; directory.mkdir()
             for name in ('ledger.xlsx','bank.pdf','sales.csv','~$lock.xlsx'):
                 (directory/name).touch()
-            app=Mock(); app.job_settings=(folder,3,False)
-            msg=ui.App.job_source_files(app)
-            self.assertEqual({r[3] for r in msg[2]}, {'Excel','PDF','CSV'})
-            self.assertEqual(len(msg[2]),3)
+            import source_check
+            res=source_check.inspect(folder)
+            files=[r['values'] for r in res['files'] if r['values'][1]=='General ledger']
+            self.assertEqual({r[4] for r in files}, {'1 Excel','1 PDF','1 CSV'})
+            self.assertEqual(len(files),3)
 
 
 if __name__ == '__main__': unittest.main()

@@ -83,10 +83,12 @@ class BatchInputsTests(unittest.TestCase):
         import queue
         with tempfile.TemporaryDirectory() as folder:
             bank=Path(folder)/'Bank';bank.mkdir();write_pdf(bank/'bank.pdf')
-            app=Mock();app.job_settings=(folder,3,False);app.q=queue.Queue()
-            result=ui.App.job_batch_convert(app,['Bank','All',1,'Not ready','1 PDF'],'sources')
-            self.assertEqual(result[0],'batch_done')
-            self.assertEqual(len(result[1]),1)
+            app=Mock();app.job_settings=(folder,3,False);app.q=queue.Queue();app.import_results=[]
+            result=ui.App.job_convert(app,[bank/'bank.pdf'])
+            self.assertEqual(result[0],'inspected')
+            self.assertIn('Converted 0 of 1', result[2])          # a text PDF without a table is not a standard Excel
+            row=next(r for r in result[1]['files'] if r['values'][3]=='bank.pdf')
+            self.assertEqual(row['mark'],'✗'); self.assertIn('not a standard table', row['values'][5])
             self.assertEqual(app.q.get_nowait(),('batch_progress',1,1))
 
 

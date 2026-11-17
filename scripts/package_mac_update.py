@@ -6,6 +6,10 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = (
     'control_center.py',
     'engine.py',
+    'sales_reconciliation.py',
+    'finance_view.py',
+    'risk_view.py',
+    'source_check.py',
     'input_tools.py',
     'toi_pdf.py',
     'audit_documents.py',

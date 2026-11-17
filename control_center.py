@@ -19,8 +19,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import calc  # noqa: E402
 import engine  # noqa: E402
-from input_tools import (source_inventory, validate_sources, convert_pdf, selected_pdfs,
-                         batch_convert_pdfs, conversion_records, converted_output, target_files, view_pdfs, organize_downloads)
+import finance_view  # noqa: E402
+import source_check  # noqa: E402
+from input_tools import batch_convert_pdfs, organize_downloads
 from toi_pdf import export_toi_pdfs, parse_steps, toi_workbook_fonts
 from audit_tools_ui import AuditToolsPanel
 
@@ -40,23 +41,20 @@ MENU = [
     ("item", "tps", "Tax Paid Summary"),
     ("item", "audit_tools", "Tax Audit Tools"),
     ("group", "", "FINANCIAL AUDIT"),
-    ("item", "check_fin", "Check source folders"),
     ("item", "fin_SALES", "Sales"),
     ("item", "fin_GL", "General ledger"),
     ("item", "fin_BANK", "Bank"),
     ("item", "fin_TB", "Trial balance"),
     ("item", "fin_AR", "A/R"),
     ("item", "fin_EXPENSE", "Expense"),
-    ("item", "tie_out", "Tax vs ledger tie-out"),
+    ("item", "tax_risk", "Tax risk finding"),
     ("group", "", "SYSTEM"),
     ("item", "log", "Processing log"),
 ]
-ACTION_TITLES = {"import_results": "Download import results","conversion_results": "PDF conversion results","sources": "Source overview", "source_files": "File details",
-                 "check_tax": "Validate source files", "build_all": "Build all data"}
+ACTION_TITLES = {"sources": "Source inspect", "build_all": "Build all data"}
 SUBTITLE = {
-    "sources": "Company file counts by tax year and financial folder. No workbook contents are opened.",
-    "check_tax": "Reads every monthly tax file with the same reader as V5.1 and reports problems before any build.",
-    "build_all": "Builds every tax report in memory. Nothing is saved until you export.",
+    "sources": "Checks every folder and validates every file in one pass. ✓ ready, ⚠ note, ✗ not ready, — not provided.",
+    "build_all": "Builds every tax report, loads GL / Sales / Bank and the tax risk finding, so every menu opens without waiting. Nothing is saved until you export.",
     "consolidate": "Consolidated monthly data with grand and year totals at the top (PR, SR, TOS, WHT).",
     "summary": "Year totals for each tax type.",
     "toi": "TOI steps 4 to 7 with Compare, % Change and Remark.",
@@ -66,8 +64,10 @@ SUBTITLE = {
     "mtr_tos": "TOS file list with year subtotals.", "mtr_wht": "WHT file list with year subtotals.",
     "tps": "Tax paid by item for the two years, from the Info folder.",
     "dashboard": "Audit rules from the ADT sheet applied to TOI. Check the Processing log for corrected V5.1 numbers.",
-    "check_fin": "Finds the GL, TB, Bank, Sales, A/R and Expense sub-folders inside the same company folder.",
-    "tie_out": "Compares tax returns with the ledger and bank.",
+    "fin_SALES": "Sales listing rows. Find, filter by month, click a heading to sort; Export saves the filtered rows.",
+    "fin_GL": "General ledger lines. Find in any column (for example Account Name = sales), filter by month, sort, export.",
+    "fin_BANK": "All bank statements in one aligned list, with a Type column that classifies each credit.",
+    "tax_risk": "Total sales, cash-in and A/R, and expense compared across monthly tax, TOI, listing, GL, TB and bank, then the risk findings.",
     "log": "Warnings and corrections from the last build.",
 }
 EXPORT_NAME = {"mtr": "MTR_Overview"}
@@ -170,6 +170,15 @@ class App(tk.Tk):
         self.last_conversion_results = []
         self.conversion_note = ""
         self.last_table = None
+        self.data_tables = {}      # (company folder, menu key) -> finance_view.Table
+        self.data_state = {}
+        self.inspection = None     # source_check.inspect() result for the selected folder
+        self.source_per_file = False
+        self.source_paths = []
+        self.risk_cache = {}       # folder -> ready-to-draw table message
+        self.risk_reports = {}     # folder -> risk_view report (for export)
+        self.cons_tables = {}      # consolidated sheet name -> finance_view.Table
+        self.cons_state = {}
         self.setup_styles()
         self.build_header()
         self.build_body()
@@ -216,7 +225,7 @@ class App(tk.Tk):
                  relief="flat", highlightthickness=1, highlightbackground=LINE,
                  highlightcolor=ACCENT, font=(FONT, 12)).pack(side="left", fill="x", expand=True, padx=10, ipady=5)
         Btn(row, "Select folder", self.pick_folder).pack(side="left", padx=(0, 6))
-        Btn(row, "Source overview", lambda: self.open_report("sources"), padx=9).pack(side="left", padx=(0, 4))
+        Btn(row, "Source inspect", self.reinspect, padx=9).pack(side="left", padx=(0, 4))
         Btn(row, "Build all data", lambda: self.open_report("build_all"), padx=9).pack(side="left", padx=(0, 4))
         Btn(row, "Open folder", lambda: self.open_if(self.folder.get()), color="#5d7391").pack(side="left", padx=(0, 6))
         Btn(row, "Refresh", self.refresh, color="#5d7391").pack(side="left")
@@ -296,21 +305,17 @@ class App(tk.Tk):
         ttk.Combobox(self.toi_pdf_options,textvariable=self.toi_output,values=("TOI_PDFs","TOI"),state="readonly",width=10).pack(side="left",padx=2)
         Btn(self.toi_pdf_options, "Open PDF folder", lambda:self.open_if(self.pdf_output_folder())).pack(side="left", padx=3)
         self.source_controls = tk.Frame(main, bg=BG)
-        Btn(self.source_controls, "Organize Download", self.organize_download, padx=8).pack(side="left", padx=3)
-        Btn(self.source_controls, "Format summary", lambda: self.open_report("sources")).pack(side="left", padx=3)
-        Btn(self.source_controls, "Validate files", lambda: self.open_report("check_tax")).pack(side="left", padx=3)
-        Btn(self.source_controls, "Convert selected row", lambda: self.convert_target_pdfs(False), padx=8).pack(side="left", padx=3)
-        Btn(self.source_controls, "Convert all target PDFs", lambda: self.convert_target_pdfs(True), padx=8).pack(side="left", padx=3)
-        Btn(self.source_controls, "Open Excel", self.open_converted_excel, padx=8).pack(side="left", padx=3)
-        Btn(self.source_controls, "Import log", lambda: self.open_report("import_results"), padx=6).pack(side="left", padx=2)
-        Btn(self.source_controls, "Results", lambda: self.open_report("conversion_results"), padx=8).pack(side="left", padx=3)
-        actions = self.source_controls.winfo_children()
-        for widget in actions:
-            widget.pack_forget()
-        for index, widget in enumerate(actions):
-            widget.grid(row=index//4, column=index%4, sticky="ew", padx=2, pady=2)
-        for column in range(4):
-            self.source_controls.columnconfigure(column, weight=1)
+        source_bar = tk.Frame(self.source_controls, bg=BG)
+        source_bar.pack(fill="x")
+        Btn(source_bar, "Organize Download", self.organize_download, padx=8).pack(side="left", padx=(0, 4))
+        Btn(source_bar, "Convert PDFs", self.convert_pending_pdfs, padx=8).pack(side="left", padx=4)
+        self.per_file_btn = Btn(source_bar, "Show each file", self.toggle_source_files, color="#5d7391", padx=8)
+        self.per_file_btn.pack(side="left", padx=4)
+        Btn(source_bar, "Open selected", self.open_selected_source, color="#5d7391", padx=8).pack(side="left", padx=4)
+        Btn(source_bar, "Build all data", lambda: self.open_report("build_all"), color=GREEN, hover="#14664a", padx=12).pack(side="right")
+        self.source_banner = tk.Label(self.source_controls, text="", bg="#e3f2ec", fg="#12533f", font=(FONT, 11, "bold"),
+                                      anchor="w", justify="left", padx=10, pady=5, wraplength=1000)
+        self.source_banner.pack(fill="x", pady=(4, 0))
         self.search_controls = tk.Frame(main, bg=BG)
         tk.Label(self.search_controls, text="Search all tax sheets", bg=BG, fg=TEXT).pack(side="left")
         self.search_query = tk.StringVar()
@@ -321,6 +326,55 @@ class App(tk.Tk):
         Btn(self.search_controls, "Next match", self.next_match).pack(side="left", padx=2)
         self.search_label = tk.Label(self.search_controls, text="", bg=BG, fg=MUTED)
         self.search_label.pack(side="left", padx=6)
+        small = (FONT, 10)
+        self.cons_controls = tk.Frame(main, bg=BG)
+        self.cons_column, self.cons_value, self.cons_month = tk.StringVar(value="All columns"), tk.StringVar(value="All"), tk.StringVar(value="All months")
+        self.cons_choices = {}
+        tk.Label(self.cons_controls, text="Filter", bg=BG, fg=TEXT, font=small).pack(side="left")
+        self.cons_column_box = ttk.Combobox(self.cons_controls, textvariable=self.cons_column, state="readonly", width=18, font=small)
+        self.cons_column_box.pack(side="left", padx=3)
+        self.cons_column_box.bind("<<ComboboxSelected>>", lambda event: self.cons_column_changed())
+        self.cons_value_box = ttk.Combobox(self.cons_controls, textvariable=self.cons_value, state="disabled", width=24, font=small)
+        self.cons_value_box.pack(side="left", padx=3)
+        self.cons_value_box.bind("<<ComboboxSelected>>", lambda event: self.apply_cons_filter())
+        self.cons_month_box = ttk.Combobox(self.cons_controls, textvariable=self.cons_month, state="readonly", width=10, font=small)
+        self.cons_month_box.pack(side="left", padx=3)
+        self.cons_month_box.bind("<<ComboboxSelected>>", lambda event: self.apply_cons_filter())
+        Btn(self.cons_controls, "Clear", self.clear_cons_filter, color="#5d7391", padx=6, pady=2).pack(side="left", padx=3)
+        self.cons_sum = tk.Label(self.cons_controls, text="", bg=BG, fg="#12533f", font=(FONT, 10, "bold"), anchor="w", justify="left", wraplength=700)
+        self.cons_sum.pack(side="left", fill="x", expand=True, padx=6)
+
+        self.data_controls = tk.Frame(main, bg=BG)
+        self.data_find, self.data_month = tk.StringVar(), tk.StringVar(value="All months")
+        self.data_column, self.data_value = tk.StringVar(value="All columns"), tk.StringVar(value="All")
+        self.data_choices = {}
+        row1 = tk.Frame(self.data_controls, bg=BG)
+        row1.pack(fill="x")
+        tk.Label(row1, text="Column", bg=BG, fg=TEXT, width=7, anchor="w").pack(side="left")
+        self.data_column_box = ttk.Combobox(row1, textvariable=self.data_column, state="readonly", width=26)
+        self.data_column_box.pack(side="left", padx=4)
+        self.data_column_box.bind("<<ComboboxSelected>>", lambda event: self.data_column_changed())
+        tk.Label(row1, text="Value", bg=BG, fg=TEXT).pack(side="left", padx=(8, 0))
+        self.data_value_box = ttk.Combobox(row1, textvariable=self.data_value, state="disabled", width=42)
+        self.data_value_box.pack(side="left", padx=4)
+        self.data_value_box.bind("<<ComboboxSelected>>", lambda event: self.apply_data_filter())
+        tk.Label(row1, text="Month", bg=BG, fg=TEXT).pack(side="left", padx=(8, 0))
+        self.data_month_box = ttk.Combobox(row1, textvariable=self.data_month, state="readonly", width=11)
+        self.data_month_box.pack(side="left", padx=4)
+        self.data_month_box.bind("<<ComboboxSelected>>", lambda event: self.apply_data_filter())
+        row2 = tk.Frame(self.data_controls, bg=BG)
+        row2.pack(fill="x", pady=(3, 0))
+        tk.Label(row2, text="Find", bg=BG, fg=TEXT, width=7, anchor="w").pack(side="left")
+        data_entry = tk.Entry(row2, textvariable=self.data_find, width=36)
+        data_entry.pack(side="left", padx=4)
+        data_entry.bind("<Return>", lambda event: self.apply_data_filter())
+        Btn(row2, "Filter", self.apply_data_filter, padx=8).pack(side="left", padx=2)
+        Btn(row2, "Clear", self.clear_data_filter, color="#5d7391", padx=8).pack(side="left", padx=2)
+        tk.Label(row2, text="Pick a column, then a value from the list. Find searches all columns. Click a heading to sort. Numbers: >1000000  100..200",
+                 bg=BG, fg=MUTED).pack(side="left", padx=8)
+        self.data_totals = tk.Label(self.data_controls, text="", bg="#e3f2ec", fg="#12533f", font=(FONT, 12, "bold"),
+                                    anchor="w", justify="left", padx=10, pady=6, wraplength=1000)
+        self.data_totals.pack(fill="x", pady=(5, 0))
 
         self.picker = tk.Frame(main, bg=BG)
         self.picker.pack(fill="x", pady=(3, 0))
@@ -423,6 +477,12 @@ class App(tk.Tk):
         self.conversion_note = ""
         self.import_results = []
         self.last_conversion_results = []
+        self.inspection = None
+        self.data_tables.clear()
+        self.risk_cache.clear()
+        self.risk_reports.clear()
+        self.cons_tables.clear()
+        self.cons_state = {}
 
     def refresh(self):
         if self.busy:
@@ -442,7 +502,8 @@ class App(tk.Tk):
         self.toi_steps.set("1-17")
         self.toi_renderer.set("Microsoft Excel" if sys.platform in ("win32","darwin") else "LibreOffice")
         if hasattr(self,"toi_output"):self.toi_output.set("TOI_PDFs")
-        for widget in (self.source_controls,self.search_controls,self.tax_options,self.toi_pdf_options):widget.pack_forget()
+        for widget in (self.source_controls,self.search_controls,self.cons_controls,self.data_controls,self.tax_options,self.toi_pdf_options):widget.pack_forget()
+        self.data_tables.clear();self.data_state={}
         self.dashboard_options.pack_forget()
         if self.audit_panel is not None:
             self.audit_panel.reset();self.audit_panel.pack_forget()
@@ -491,6 +552,128 @@ class App(tk.Tk):
             tag = tags[index] if tags else report_row_tag(values, index)
             self.tree.insert("", "end", values=values, tags=(tag,))
         self.company_label.config(text=Path(self.folder.get()).name if self.folder.get() else "Select a company folder")
+        if self.current and self.current.get("data"):
+            self.decorate_data_headings()
+
+    # ------------------------------------------------------------ finance data view (GL, Sales, Bank ...)
+    def current_table(self):
+        return self.data_tables.get((str(Path(self.folder.get())), (self.current or {}).get("key")))
+
+    def show_data(self, key):
+        table = self.data_tables[(str(Path(self.folder.get())), key)]
+        self.current = {"key": key, "data": True}
+        self.data_state = {"page": 0, "sort": None, "indices": []}
+        self.data_find.set("")
+        self.data_month.set("All months")
+        self.data_column.set(table.default_field() or "All columns")
+        self.data_column_box.config(values=["All columns"] + table.columns)
+        self.data_month_box.config(values=["All months"] + table.months)
+        self.refresh_data_values()
+        self.source_controls.pack_forget()
+        self.data_controls.pack(fill="x", before=self.picker, pady=3)
+        self.btn_export.set_enabled(True)
+        self.set_picker([], "")
+        self.apply_data_filter()
+
+    def refresh_data_values(self):
+        """Fill the Value list with every value of the chosen column (account names, buyers, bank accounts...)."""
+        table = self.current_table()
+        column = self.data_column.get()
+        choices = table.choices(column) if table is not None and column != "All columns" else []
+        self.data_choices = {label: value for label, value in choices}
+        self.data_value.set("All")
+        self.data_value_box.config(values=["All"] + [label for label, _ in choices],
+                                   state="readonly" if choices else "disabled")
+
+    def data_column_changed(self):
+        self.refresh_data_values()
+        self.apply_data_filter()
+
+    def apply_data_filter(self):
+        table = self.current_table()
+        if table is None or not (self.current or {}).get("data"):
+            return
+        column, month, label = self.data_column.get(), self.data_month.get(), self.data_value.get()
+        field = None if column == "All columns" else column
+        value = self.data_choices.get(label) if label != "All" else None
+        self.data_state["indices"] = table.view(
+            self.data_find.get(), None, None if month == "All months" else month,
+            self.data_state.get("sort"), field, value)
+        self.data_state["page"] = 0
+        self.render_data()
+
+    def clear_data_filter(self):
+        if not (self.current or {}).get("data"):
+            return
+        self.data_find.set("")
+        self.data_month.set("All months")
+        self.data_value.set("All")
+        self.apply_data_filter()
+
+    def sort_data(self, column):
+        if self.busy or not (self.current or {}).get("data"):
+            return
+        sort = self.data_state.get("sort")
+        desc = bool(sort and sort[0] == column and not sort[1])
+        self.data_state["sort"] = (column, desc)
+        self.apply_data_filter()
+
+    def render_data(self):
+        table = self.current_table()
+        indices = self.data_state["indices"]
+        size = self.page_size
+        pages = max(1, (len(indices) + size - 1) // size)
+        page = max(0, min(self.data_state["page"], pages - 1))
+        self.data_state["page"] = page
+        rows = [table.display(i) for i in indices[page * size:(page + 1) * size]]
+        self.draw(table.columns, rows)
+        self.page_label.config(text=f"Page {page + 1} / {pages}")
+        label = next((m[2] for m in MENU if m[1] == self.current["key"]), "Data")
+        first = page * size + 1 if indices else 0
+        text = f"{label}: rows {first:,}–{min(len(indices), (page + 1) * size):,} of {len(indices):,}"
+        if len(indices) != len(table.rows):
+            text += f" (filtered from {len(table.rows):,})"
+        self.data_totals.config(text="SUM of the filtered rows (all pages):   " + table.summary(indices))
+        if table.notes:
+            text += " · Skipped: " + "; ".join(table.notes[:2])
+        self.status(text)
+
+    def decorate_data_headings(self):
+        table = self.current_table()
+        if table is None:
+            return
+        sort = self.data_state.get("sort")
+        for index, cid in enumerate(self.tree["columns"]):
+            arrow = (" ▼" if sort[1] else " ▲") if sort and sort[0] == index else ""
+            self.tree.heading(cid, text=table.columns[index] + arrow, command=lambda i=index: self.sort_data(i))
+
+    def export_data(self):
+        table = self.current_table()
+        if table is None or self.busy:
+            return
+        stem = Path(self.folder.get()).name.replace(" ", "_")[:30]
+        path = filedialog.asksaveasfilename(
+            title="Export filtered rows to Excel", defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")],
+            initialdir=str(Path.home() / "Documents"), initialfile=f"{stem}_{self.current['key']}_filtered.xlsx")
+        if not path:
+            return
+        indices = tuple(self.data_state["indices"])
+
+        def job():
+            table.export(path, indices)
+            return ("exported", path)
+        self.run_bg(job)
+
+    def job_tax_risk(self):
+        import risk_view
+        folder = self.job_settings[0]
+        report = risk_view.build_report(folder)
+        rows, tags = risk_view.display_rows(report)
+        notes = ("  Notes: " + "; ".join(report["notes"][:3])) if report["notes"] else ""
+        msg = ("table", risk_view.COLUMNS, rows, f"Tax risk finding {report['year']}. Export this report saves it to Excel.{notes}", False, tags)
+        self.risk_reports[str(Path(folder))] = report
+        self.risk_cache[str(Path(folder))] = msg
+        return msg
 
     def apply_months(self):
         if self.busy:
@@ -549,6 +732,14 @@ class App(tk.Tk):
                 self.tree.column(cid, width=max(10, int(available * width / total)))
 
     def change_page(self, direction):
+        if not self.busy and self.current and self.current.get("data") and self.current_table() is not None:
+            self.data_state["page"] += direction
+            self.render_data()
+            return
+        if not self.busy and self.current and self.current.get("key") == "consolidate" and self.cons_state.get("indices") is not None:
+            self.cons_state["page"] += direction
+            self.render_cons()
+            return
         if self.busy or not self.current or not self.current.get("sheet"):
             return
         name = self.current["sheet"]
@@ -625,6 +816,10 @@ class App(tk.Tk):
                       ["On Mac, grant Excel access to TOI_PDFs when requested; stable work paths reduce repeat requests."],
                       ["Source workbooks and existing PDFs are preserved."]])
             return
+        if self.current.get("key") == "consolidate" and self.cons_state.get("sheet") != name:
+            self.setup_cons_filter(name)
+        elif self.current.get("key") == "consolidate":
+            self.cons_state["indices"] = None
         self.current["sheet"] = name
         self.set_picker(list(self.current["tables"]), name)
         page = self.sheet_pages.get(name, 0)
@@ -712,67 +907,98 @@ class App(tk.Tk):
             self.status("Could not open source workbook: "+str(exc))
 
     def pdf_row_action(self, event):
-        if self.current and self.current.get("key") in ("check_tax", "conversion_results"):
+        if self.current and self.current.get("key") == "sources":
             row = self.tree.identify_row(event.y)
             if row:
                 self.tree.selection_set(row)
-                values = self.tree.item(row,"values")
-                if str(values[4]).startswith(("CONVERTED:", "ALREADY CONVERTED:")):
-                    self.open_converted_excel()
-                else:
-                    self.convert_target_pdfs(False)
+                self.open_selected_source()
 
-    def open_converted_excel(self):
-        if self.busy or not self.need_folder():
-            return
-        selection = self.tree.selection()
-        if not selection:
-            self.status("Select a converted PDF row in Results or Validate files first.")
-            return
-        values = self.tree.item(selection[0], "values")
-        sources = view_pdfs(self.folder.get(), values, (self.current or {}).get("key", "sources"))
-        records = conversion_records(self.folder.get())
-        outputs = [converted_output(self.folder.get(),p,records) for p in sources]
-        outputs = [p for p in outputs if p]
-        if outputs:
-            open_path(outputs[0] if len(outputs)==1 else outputs[0].parent)
-        else:
-            self.status("No registered Excel extraction for this row. Use Convert selected row first.")
+    # ------------------------------------------------------------ source inspect
+    def inspection_ready(self):
+        return self.inspection is not None and self.inspection["folder"] == str(Path(self.folder.get()))
 
-    def convert_target_pdfs(self, all_targets=False):
-        if self.busy or not self.need_folder():
-            return
-        values = None
-        if not all_targets:
-            selection = self.tree.selection()
-            if not selection:
-                self.status("Select a source folder or PDF row first, or use Convert all target PDFs.")
-                return
-            values = self.tree.item(selection[0], "values")
-        key = (self.current or {}).get("key", "sources")
-        self.run_bg(self.job_batch_convert, values, key)
+    def show_inspection(self):
+        res = self.inspection
+        rows, tags, paths = source_check.display(res, self.source_per_file)
+        self.source_paths = paths
+        self.set_picker([], "")
+        self.draw(source_check.FILE_COLUMNS if self.source_per_file else source_check.COLUMNS, rows, align_right=False, tags=tags)
+        bad = res["counts"].get(source_check.BAD, 0)
+        self.source_banner.config(text=source_check.banner(res), bg="#fbe5e7" if bad else "#e3f2ec", fg="#9a293c" if bad else "#12533f")
+        self.per_file_btn.config(text="Show folders" if self.source_per_file else "Show each file")
+        note = self.conversion_note
+        self.conversion_note = ""
+        self.status(note or "Double-click a row to open that file or folder; a ✗ PDF row converts that PDF.")
 
-    def job_batch_convert(self, values, key):
-        folder = self.job_settings[0]
-        sources = view_pdfs(folder,values,key)
-        if not sources:
-            return ("batch_done", [], "No PDFs found in the selected target scope.")
-        results = batch_convert_pdfs(folder,sources,progress=lambda done,total: self.q.put(("batch_progress",done,total)))
-        failures = sum(r[4].startswith("ERROR") for r in results)
-        note = f"{len(results)-failures} of {len(results)} PDFs have Excel extractions; {failures} failed. Review/mapping required. See Results."
-        return ("batch_done", results, note)
-
-    def pick_pdf(self):
+    def reinspect(self):
+        """Top-bar button: always look at the folder again (files may have been added)."""
         if self.busy:
             return
-        source = filedialog.askopenfilename(title="Select a text PDF to extract", filetypes=[("PDF", "*.pdf")])
-        if not source:
+        self.inspection = None
+        self.open_report("sources")
+
+    def toggle_source_files(self):
+        if self.busy or not self.inspection_ready():
             return
-        output = filedialog.asksaveasfilename(title="Save extracted workbook for review", defaultextension=".xlsx",
-                    initialdir=str(Path(source).parent), initialfile=Path(source).stem+"_review.xlsx",
-                    filetypes=[("Excel", "*.xlsx")])
-        if output:
-            self.run_bg(lambda: ("converted", convert_pdf(source, output)))
+        self.source_per_file = not self.source_per_file
+        if (self.current or {}).get("key") == "sources":
+            self.show_inspection()
+
+    def selected_source_path(self):
+        selection = self.tree.selection()
+        if not selection or (self.current or {}).get("key") != "sources":
+            return None
+        index = self.tree.index(selection[0])
+        return self.source_paths[index] if index < len(self.source_paths) else None
+
+    def open_selected_source(self):
+        if self.busy:
+            return
+        path = self.selected_source_path()
+        if path is None:
+            self.status("Select a row first.")
+            return
+        if self.inspection_ready() and path in self.inspection["pending_pdfs"]:
+            self.run_bg(self.job_convert, [path])
+            return
+        self.open_if(str(path))
+
+    def convert_pending_pdfs(self):
+        if self.busy or not self.need_folder():
+            return
+        if not self.inspection_ready():
+            self.status("Open Source inspect first.")
+            return
+        pending = self.inspection["pending_pdfs"]
+        if not pending:
+            self.status("No PDF needs converting.")
+            return
+        self.run_bg(self.job_convert, list(pending))
+
+    def job_inspect(self, import_results=None):
+        return ("inspected", source_check.inspect(self.job_settings[0], import_results), None)
+
+    def job_convert(self, paths):
+        """Convert PDFs, then save each extraction as a standard Excel next to the PDF (same name), then re-inspect."""
+        folder = Path(self.job_settings[0])
+        results = batch_convert_pdfs(folder, paths, progress=lambda done, total: self.q.put(("batch_progress", done, total)))
+        made, failed = [], []
+        for top, parent, name, _rows, status, output in results:
+            source = folder / parent / name
+            if status.startswith("ERROR") or not output:
+                failed.append(f"{name}: {status.replace('ERROR: ', '')}")
+                continue
+            key = next((k for k in engine.FINANCE_FOLDERS if engine.finance_folder(folder, k) and source.is_relative_to(engine.finance_folder(folder, k))), "")
+            try:
+                ok, why = source_check.standardize_extraction(folder / output, source.with_suffix(".xlsx"), key)
+            except Exception as exc:
+                ok, why = False, str(exc).splitlines()[0]
+            (made if ok else failed).append(f"{name}: {why}")
+        note = f"Converted {len(made)} of {len(results)} PDF(s) to standard Excel."
+        if failed:
+            note += " Not usable: " + "; ".join(failed[:3])
+        self.inspection = None
+        return ("inspected", source_check.inspect(folder, self.import_results), note)
 
     def find_text(self):
         if self.busy or not self.current or self.current.get("key") != "consolidate":
@@ -808,6 +1034,8 @@ class App(tk.Tk):
         self.search_index = (self.search_index + 1) % len(self.search_hits)
         name, row = self.search_hits[self.search_index]
         self.search_target = (name, row)
+        if self.cons_state.get("sheet") == name and self.cons_state.get("indices") is not None:
+            self.setup_cons_filter(name)
         self.sheet_pages[name] = (row-1)//self.page_size
         self.search_label.config(text=f"{self.search_index+1} / {len(self.search_hits)} matching rows · {name} row {row}")
         self.show_sheet(name)
@@ -825,13 +1053,16 @@ class App(tk.Tk):
         self.sub_lbl.config(text=SUBTITLE.get(key, ""))
         self.current = {"key": key}
         self.search_controls.pack_forget()
+        self.cons_controls.pack_forget()
         self.source_controls.pack_forget()
+        self.data_controls.pack_forget()
         self.search_target = None
         self.search_hits = []
         self.search_label.config(text="")
         if key == "consolidate":
-            self.search_controls.pack(fill="x", before=self.picker, pady=3)
-        if key in ("sources", "source_files", "check_tax", "conversion_results", "import_results", "check_fin") or key.startswith("fin_"):
+            self.search_controls.pack(fill="x", before=self.picker, pady=(3, 0))
+            self.cons_controls.pack(fill="x", before=self.picker, pady=(2, 3))
+        if key == "sources":
             self.source_controls.pack(fill="x", before=self.picker, pady=3)
         self.page_label.config(text="")
         self.tax_options.pack_forget()
@@ -841,38 +1072,43 @@ class App(tk.Tk):
             self.dashboard_options.pack(side="left", padx=6)
         if key == "tps":
             self.tax_options.pack(fill="x", before=self.picker, pady=4)
-        self.btn_export.set_enabled(key in engine.SECTIONS)
+        self.btn_export.set_enabled(key in engine.SECTIONS or key == "tax_risk")
         if key == "audit_tools":
             self.set_picker([],"");self.preview_card.pack_forget()
             if self.audit_panel is None:self.audit_panel=AuditToolsPanel(self.main_panel,self)
             self.audit_panel.pack(fill="both",expand=True,before=self.status_lbl,pady=4)
             self.audit_panel.load()
             return
-        if key == "import_results":
-            self.set_picker([], "")
-            self.draw(["Download source", "Destination", "Result"],self.import_results)
-            self.status("Organize Download starts an import; this log shows moved/skipped files. Existing files are never replaced.")
-            return
-        if key == "conversion_results":
-            self.set_picker([], "")
-            self.draw(["Folder", "Scope", "PDF", "Rows", "Result", "Excel output"], self.last_conversion_results)
-            self.status("Double-click converted rows to open Excel, or failed PDF rows to retry conversion.")
-            return
-        if key in ("sources", "source_files"):
-            if self.need_folder():
-                self.run_bg(self.job_inventory if key == "sources" else self.job_source_files)
-            return
-        if key in ("check_fin", "tie_out") or key.startswith("fin_"):
-            if not self.need_folder():
-                return
-            self.run_bg(self.job_finance, key)
-            return
-        if key == "check_tax":
-            if not self.need_folder():
-                return
-            self.run_bg(self.job_check_tax)
-            return
         if not self.need_folder():
+            return
+        folder = str(Path(self.folder.get()))
+        if key == "sources":
+            if self.inspection_ready():
+                self.show_inspection()
+            else:
+                self.run_bg(self.job_inspect, self.import_results)
+            return
+        if key == "tax_risk":
+            if folder in self.risk_cache:
+                self.q.put(self.risk_cache[folder])
+            else:
+                self.run_bg(self.job_tax_risk)
+            return
+        if key.startswith("fin_"):
+            if (folder, key) in self.data_tables:
+                self.show_data(key)
+            elif self.inspection_ready():
+                self.show_not_ready(key)
+            else:
+                self.run_bg(self.job_inspect, self.import_results)
+            return
+        if key == "build_all":
+            self.run_bg(self.job_build_all, self.import_results)
+            return
+        if self.built_ready():
+            # Already built: open instantly, no background job.
+            self.job_settings = self.settings_now()
+            self.q.put(self.job_tois() if key == "tois" else self.job_report(key))
             return
         if key == "tois":
             self.run_bg(self.job_tois)
@@ -898,6 +1134,130 @@ class App(tk.Tk):
             except Exception as exc:
                 self.q.put(("error", str(exc)))
         threading.Thread(target=go, daemon=True).start()
+
+    def settings_now(self):
+        try:
+            return (self.folder.get(), self.months.get(), self.link_all.get())
+        except tk.TclError:
+            return None
+
+    def built_ready(self):
+        return self.built is not None and not self.partial_build and self.built[0] == self.settings_now()
+
+    def show_not_ready(self, key):
+        """A finance menu whose folder has no usable file: show its Source inspect lines."""
+        label = engine.FINANCE_FOLDERS[key.split("_", 1)[1]][0]
+        res = self.inspection
+        rows = [r for r in res["rows"] if r["values"][1] == label] + [r for r in res["files"] if r["values"][1] == label]
+        self.set_picker([], "")
+        self.draw(source_check.FILE_COLUMNS, [r["values"] for r in rows], align_right=False,
+                  tags=[source_check.TAG[r["mark"]] for r in rows])
+        self.status(f"{label} has no usable Excel or CSV file yet. Fix it in Source inspect, then open this menu again.")
+
+    # ------------------------------------------------------------ consolidated data filter
+    def cons_table(self, name):
+        """finance_view.Table of the data rows of one consolidated sheet (PR, SR, TOS, WHT)."""
+        wb, cal = self.built[1], self.built[3]
+        ws = wb[name]
+        r = 1
+        while r <= ws.max_row and str(ws.cell(r, 1).value or "").startswith(("Grand Total", "Year ")):
+            r += 1
+        top, sub = r, r + 1
+        width = ws.max_column
+        spans = {}
+        for merged in ws.merged_cells.ranges:
+            if merged.min_row <= top <= merged.max_row:
+                for col in range(merged.min_col, merged.max_col + 1):
+                    spans[col] = ws.cell(merged.min_row, merged.min_col).value
+        labels, used = [], set()
+        for col in range(1, width + 1):
+            a = spans.get(col, ws.cell(top, col).value)
+            b = ws.cell(sub, col).value if sub > top else None
+            a = re.sub(r"\s+", " ", str(a)).strip() if a not in (None, "") else ""
+            b = re.sub(r"\s+", " ", str(b)).strip() if b not in (None, "") and str(b) != a else ""
+            label = (f"{a} / {b}" if a and b else a or b) or calc_letter(col)
+            while label in used:
+                label += " "
+            used.add(label)
+            labels.append(label)
+        rows = []
+        for number, values in enumerate(ws.iter_rows(min_row=sub + 1, max_col=width, values_only=True), start=sub + 1):
+            if all(v in (None, "") for v in values):
+                continue
+            values = [cal.value(name, number, i + 1) if isinstance(v, str) and v.startswith("=") else v for i, v in enumerate(values)]
+            rows.append([number] + [finance_view._clean(v) for v in values])
+        table = finance_view.Table(["Row"] + labels, rows)
+        layout = engine.cons.LAYOUTS.get(name.upper())
+        if layout is not None:
+            table.money = table.amount = list(range(layout.first_col, layout.last_col + 1))
+        table.date_col = 2 if width >= 2 else None
+        table.refresh_months()
+        return table
+
+    def setup_cons_filter(self, name):
+        table = self.cons_tables.get(name)
+        if table is None:
+            self.cons_controls.pack_forget()
+            return
+        if not self.cons_controls.winfo_manager():
+            self.cons_controls.pack(fill="x", before=self.picker, pady=(2, 3))
+        self.cons_state = {"sheet": name, "indices": None, "page": 0}
+        self.cons_column.set("All columns")
+        self.cons_value.set("All")
+        self.cons_month.set("All months")
+        self.cons_choices = {}
+        self.cons_column_box.config(values=["All columns"] + table.columns[1:])
+        self.cons_value_box.config(values=["All"], state="disabled")
+        self.cons_month_box.config(values=["All months"] + table.months)
+        self.cons_sum.config(text="Σ " + table.summary(range(len(table.rows)), compact=True))
+
+    def cons_column_changed(self):
+        table = self.cons_tables.get(self.cons_state.get("sheet"))
+        if table is None:
+            return
+        column = self.cons_column.get()
+        choices = table.choices(column) if column != "All columns" else []
+        self.cons_choices = dict(choices)
+        self.cons_value.set("All")
+        self.cons_value_box.config(values=["All"] + [label for label, _ in choices], state="readonly" if choices else "disabled")
+        self.apply_cons_filter()
+
+    def apply_cons_filter(self):
+        if self.busy:
+            return
+        name = self.cons_state.get("sheet")
+        table = self.cons_tables.get(name)
+        if table is None:
+            return
+        column, label, month = self.cons_column.get(), self.cons_value.get(), self.cons_month.get()
+        value = self.cons_choices.get(label) if label != "All" else None
+        if value is None and month == "All months":
+            self.cons_state.update(indices=None, page=0)
+            self.cons_sum.config(text="Σ " + table.summary(range(len(table.rows)), compact=True))
+            self.show_sheet(name)
+            return
+        indices = table.view(month=None if month == "All months" else month,
+                             field=None if column == "All columns" else column, value=value)
+        self.cons_state.update(indices=indices, page=0)
+        self.render_cons()
+
+    def clear_cons_filter(self):
+        name = self.cons_state.get("sheet")
+        if name:
+            self.setup_cons_filter(name)
+            self.show_sheet(name)
+
+    def render_cons(self):
+        table = self.cons_tables[self.cons_state["sheet"]]
+        indices = self.cons_state["indices"]
+        size = self.page_size
+        pages = max(1, (len(indices) + size - 1) // size)
+        page = self.cons_state["page"] = max(0, min(self.cons_state["page"], pages - 1))
+        rows = [table.display(i) for i in indices[page * size:(page + 1) * size]]
+        self.draw(table.columns, rows, tags=["odd" if n % 2 else "even" for n in range(len(rows))])
+        self.page_label.config(text=f"Page {page + 1} / {pages}")
+        self.cons_sum.config(text="Σ filtered: " + table.summary(indices, compact=True))
+        self.status(f"{self.cons_state['sheet']}: {len(indices):,} of {len(table.rows):,} rows match the filter. Clear shows the full sheet with its totals.")
 
     # ------------------------------------------------------------ background jobs (no Tk calls here)
     def ensure_built(self, summary_only=False):
@@ -938,65 +1298,6 @@ class App(tk.Tk):
             self.built = (key, wb, log, calc.Calc(wb))
         return self.built
 
-    def job_inventory(self):
-        folder = self.job_settings[0]
-        if self.inventory is None or self.inventory[0] != folder:
-            self.inventory = (folder, source_inventory(folder))
-        return ("table", ["Source", "Year / scope", "Files", "Status", "Formats"], self.inventory[1],
-                self.conversion_note or "Target-folder inventory. Use Validate files to check contents.", False)
-
-    def job_source_files(self):
-        root = Path(self.job_settings[0])
-        rows = []
-        for path in target_files(root):
-            if (path.is_file() and path.suffix.lower() in engine.FIN_EXT and not any(
-                    part.startswith((".", "~$")) for part in path.relative_to(root).parts)):
-                rel = path.relative_to(root)
-                kind = {".xlsx": "Excel", ".xlsm": "Excel macro", ".xls": "Excel legacy",
-                        ".csv": "CSV", ".pdf": "PDF"}[path.suffix.lower()]
-                rows.append([rel.parts[0], rel.parts[1] if len(rel.parts) > 2 else "—", path.name, kind, str(rel)])
-        return ("table", ["Folder", "Year / subfolder", "File name", "Format", "Relative path"], rows,
-                f"{len(rows):,} files found. Inventory only; PDF/CSV presence does not imply tax import support.", False)
-
-    def job_check_tax(self):
-        rows = validate_sources(self.job_settings[0])
-        bad = sum(1 for r in rows if r[4] != "READY")
-        displayed = [list(r)+[("Open Excel" if str(r[4]).startswith("CONVERTED:") else "Convert PDF")
-                              if str(r[2]).lower().endswith(".pdf") else ""] for r in rows]
-        return ("table", ["Source", "Scope", "Source file", "Rows", "Result", "Action (double-click)"], displayed,
-                f"{len(rows) - bad} READY tax entries; all other rows require the action shown.", False)
-
-    def job_finance(self, key):
-        folder = self.job_settings[0]
-        summary, files = engine.check_finance(folder)
-        statuses = {r[0]: r[3] for r in source_inventory(folder)}
-        summary = [(*r[:4], statuses.get(r[0],r[4])) for r in summary]
-        records = conversion_records(folder)
-        updated = []
-        for row in files:
-            label, name, sheets, count, note = row
-            if str(name).lower().endswith(".pdf"):
-                finance_key = next(k for k,v in engine.FINANCE_FOLDERS.items() if v[0]==label)
-                directory = engine.finance_folder(folder,finance_key)
-                output = converted_output(folder,directory/name,records)
-                if output:
-                    note = "CONVERTED: Excel available; review required"
-            updated.append((label,name,sheets,count,note))
-        files = updated
-        if key in ("check_fin", "tie_out"):
-            if key == "tie_out":
-                return ("table", ["Tax vs ledger"], [["Needs sample GL, bank, TB and A/R files before it can be built."]],
-                        "Not built yet.", False)
-            return ("table", ["Source", "Folder", "Files", "Formats", "Readiness"], [list(r) for r in summary],
-                    "Place documents inside the sub-folders. PDFs are flagged, never assumed correct.", False)
-        fkey = key.split("_", 1)[1]
-        label = engine.FINANCE_FOLDERS[fkey][0]
-        rows = [list(r[1:]) for r in files if r[0] == label]
-        if not rows:
-            rows = [["(no files found)", "", "", "Add files to the " + label + " sub-folder"]]
-        return ("table", ["File", "Sheets", "Rows", "Result"], rows,
-                f"{label}: reconciliation is added after sample files are reviewed.", False)
-
     def job_report(self, key):
         built = self.ensure_built(summary_only=key == "tps")
         _k, wb, log, cal = built
@@ -1013,8 +1314,45 @@ class App(tk.Tk):
             names = [n for n in names if n != "TOI"]  # keep hidden workbook dependency for dashboard formulas/export
         if key == "mtr":
             names = [n for n in ("MTR_PR", "MTR_SR", "MTR_TOS", "MTR_WHT", "Summary MTR") if n in names]
+        if key == "consolidate":
+            for name in names:
+                if name not in self.cons_tables:
+                    self.cons_tables[name] = self.cons_table(name)
         tables = dict.fromkeys(names)
         return ("sheets", key, tables)
+
+    def job_build_all(self, import_results=None):
+        """Everything the menus need, so they all open without waiting afterwards."""
+        folder = self.job_settings[0]
+        res = source_check.inspect(folder, import_results)
+        notes, pages, rows = [], {}, []
+        mark = source_check
+        try:
+            _k, wb, _log, _cal = self.ensure_built()
+            for name in wb.sheetnames:
+                pages[(name, 0)] = self.job_page(name, 0)
+            for name in ("PR", "SR", "TOS", "WHT"):
+                if name in wb.sheetnames:
+                    self.cons_tables[name] = self.cons_table(name)
+            rows.append([mark.READY, "Tax reports", f"{len(wb.sheetnames)} sheets ready: " + ", ".join(wb.sheetnames)])
+        except Exception as exc:
+            rows.append([mark.BAD, "Tax reports", "Not built: " + (str(exc).splitlines()[0] if str(exc) else type(exc).__name__)])
+        for key, (label, _names) in engine.FINANCE_FOLDERS.items():
+            table = res["tables"].get(key)
+            line = next((r for r in res["rows"] if r["values"][1] == label), None)
+            if table is not None:
+                rows.append([mark.READY, label, f"{len(table.rows):,} rows ready"])
+            else:
+                rows.append([line["mark"] if line else mark.NONE, label, line["values"][5] if line else "Not provided"])
+        risk = None
+        try:
+            risk = self.job_tax_risk()
+            report = self.risk_reports.get(str(Path(folder)))
+            high = sum(f["sev"] == "High" for f in report["findings"]) if report else 0
+            rows.append([mark.READY, "Tax risk finding", f"{report['year']}: {len(report['findings'])} findings, {high} High" if report else "Ready"])
+        except Exception as exc:
+            rows.append([mark.BAD, "Tax risk finding", "Not built: " + (str(exc).splitlines()[0] if str(exc) else type(exc).__name__)])
+        return ("built_all", res, pages, risk, rows)
 
     # ------------------------------------------------------------ queue results -> screen
     def poll(self):
@@ -1042,11 +1380,11 @@ class App(tk.Tk):
                     moved = sum(r[2]=="MOVED" for r in msg[1])
                     file_rows = [r for r in msg[1] if not r[2].startswith("INFO:")]
                     if file_rows:
-                        self.conversion_note = f"Download setup: {moved} moved, {len(file_rows)-moved} left for review. See Import log."
+                        self.conversion_note = f"Organize Download: {moved} moved, {len(file_rows)-moved} left in Download (see the Download rows)."
                     elif msg[1]:
-                        self.conversion_note = msg[1][0][2]
-                    self.inventory = None
-                    self.open_report("import_results" if len(msg)>2 and msg[2] else "sources")
+                        self.conversion_note = msg[1][0][2].replace("INFO: ", "")
+                    self.inspection = None
+                    self.open_report("sources")
                 elif kind == "toi_fonts":
                     self.draw(["TOI workbook", "Font families referenced", "Note"],msg[1])
                     self.status("On Mac, install matching fonts in Font Book and restart Excel. This lists workbook fonts; installed fonts are not verified.")
@@ -1054,20 +1392,30 @@ class App(tk.Tk):
                     self.draw(["TOI workbook", "Steps", "Result", "PDF file"],msg[1])
                     successful = sum(r[2]=="EXPORTED" for r in msg[1])
                     self.status(f"TOI PDF export: {successful}/{len(msg[1])} workbooks exported. See {msg[2] if len(msg)>2 else 'TOI_PDFs'}.")
-                elif kind == "batch_done":
-                    self.last_conversion_results = msg[1]
-                    self.conversion_note = msg[2]
-                    self.inventory = None
-                    self.open_report("sources")
-                    self.status(msg[2])
-                elif kind == "converted":
-                    result = msg[1]
-                    self.inventory = None
-                    self.status("Extracted workbook saved for manual review: " + result['output'])
-                    messagebox.showinfo("PDF extraction complete — review required",
-                        f"{result['tables']} tables and {result['text_pages']} text pages saved.\n\n"
-                        "Compare balances and every page with the PDF, correct data and map columns. "
-                        "This file is not automatically approved for tax import or reconciliation.\n\n" + result['output'])
+                elif kind == "inspected":
+                    res = msg[1]
+                    self.inspection = res
+                    for fkey, table in res["tables"].items():
+                        self.data_tables[(res["folder"], "fin_" + fkey)] = table
+                    if msg[2]:
+                        self.conversion_note = msg[2]
+                    key = (self.current or {}).get("key")
+                    if key == "sources":
+                        self.show_inspection()
+                    elif key and key.startswith("fin_") and res["folder"] == str(Path(self.folder.get())):
+                        self.open_report(key)
+                elif kind == "built_all":
+                    _k, res, pages, risk, rows = msg
+                    self.inspection = res
+                    for fkey, table in res["tables"].items():
+                        self.data_tables[(res["folder"], "fin_" + fkey)] = table
+                    for cache_key, page in pages.items():
+                        self.page_cache[cache_key] = page
+                    self.set_picker([], "")
+                    self.draw(["", "Area", "Result"], rows, align_right=False,
+                              tags=[source_check.TAG.get(r[0], "even") for r in rows])
+                    self.status("Build all data finished. Every menu on the left now opens without waiting.")
+                    self.notify_build_done()
                 elif kind == "search":
                     self.search_hits = msg[1]
                     self.search_index = -1
@@ -1077,13 +1425,13 @@ class App(tk.Tk):
                         self.search_label.config(text="No matches in any tax sheet")
                 elif kind == "page":
                     self.page_cache[(msg[1], msg[2])] = msg
-                    while len(self.page_cache) > 32:
+                    while len(self.page_cache) > 160:
                         self.page_cache.popitem(last=False)
                     self.present_page(msg)
                 elif kind == "table":
-                    _k, cols, rows, note, _exp = msg
+                    _k, cols, rows, note, _exp, *extra = msg
                     self.set_picker([], "")
-                    self.draw(cols, rows)
+                    self.draw(cols, rows, tags=extra[0] if extra else None)
                     self.status(note)
                     if _exp:self.notify_build_done()
                 elif kind == "sheets":
@@ -1092,6 +1440,7 @@ class App(tk.Tk):
                     if tables:
                         self.show_sheet(next(iter(tables)))
                     else:
+                        self.cons_controls.pack_forget()
                         self.draw(["Result"], [["This report was not produced. See Processing log."]])
                 elif kind == "error":
                     self.status("Stopped: " + msg[1])
@@ -1125,13 +1474,31 @@ class App(tk.Tk):
         self.run_bg(job)
 
     def export_this(self):
+        if (self.current or {}).get("data"):
+            self.export_data()
+            return
         key = (self.current or {}).get("key")
+        if key == "tax_risk":
+            self.export_risk()
+            return
         if key not in engine.SECTIONS:
             messagebox.showinfo("Export", "Open a report first. This view has nothing to export.\n"
                                           "Use Export everything to save all reports.")
             return
         stem = Path(self.folder.get()).name.replace(" ", "_")[:30]
         self.export([key], f"{stem}_{EXPORT_NAME.get(key, key)}.xlsx")
+
+    def export_risk(self):
+        import risk_view
+        report = self.risk_reports.get(str(Path(self.folder.get())))
+        if report is None or self.busy:
+            return
+        stem = Path(self.folder.get()).name.replace(" ", "_")[:30]
+        path = filedialog.asksaveasfilename(
+            title="Export tax risk finding to Excel", defaultextension=".xlsx", filetypes=[("Excel", "*.xlsx")],
+            initialdir=str(Path.home() / "Documents"), initialfile=f"{stem}_Tax_Risk_{report['year']}.xlsx")
+        if path:
+            self.run_bg(lambda: (risk_view.save_workbook(report, path), ("exported", path))[1])
 
     def export_all(self):
         stem = Path(self.folder.get()).name.replace(" ", "_")[:30] if self.folder.get() else "Audit"

@@ -54,14 +54,12 @@ For future updates, rebuild the ZIP with `python3 scripts/package_mac_update.py`
 after changing any of the bundled files, and commit the refreshed ZIP alongside
 the source changes.
 
-Batch conversion: select a source folder/year row and choose **Convert selected
-row**, or use **Convert all target PDFs**. Validation/conversion exclude unrelated
-folders. Outputs are preserved under `.pdf-extractions`, with source-hash history
-in `.tax-audit-conversions.json`; use **Results → Open Excel** to inspect them.
-The overview refreshes automatically and distinguishes conversion completion from
-reviewed/import-ready financial data. See UI_MAC_TEST.md for the full workflow.
+PDF conversion: in **Source inspect**, click **Convert PDFs** (or double-click a ✗ PDF
+row). Raw extractions stay under `.pdf-extractions` with source-hash history in
+`.tax-audit-conversions.json`; when the PDF holds a real table, a standard Excel with the
+**same name as the PDF** is saved next to it and the row turns ✓. See "Source inspect" below.
 
-The update bundle includes fifteen files, including the Tax Audit Tools/search
+The update bundle includes nineteen files, including the Tax Audit Tools/search
 modules, `assets/meeting_note_template.docx` and `assets/tax_laws.json`.
 Copy the **assets folder** too, and rerun
 the Mac installer to install python-docx. Selecting a new
@@ -71,8 +69,9 @@ Microsoft Excel setup and Khmer font guidance for TOI PDF export.
 
 
 If a company has Info/Information plus Download, initial organization now proceeds
-normally. In Source overview, **Organize Download** starts an explicit incremental
-import; **Import log** only displays results. Existing files are never replaced.
+normally. In Source inspect, **Organize Download** starts an explicit incremental
+import; files it could not place stay in Download and are listed there with the reason.
+Existing files are never replaced.
 Select the parent company folder containing Download, rather than Download itself.
 
 
@@ -116,3 +115,82 @@ To rebuild the bundled library from a newer compilation without running VBA:
 
 Review the new data, restart the app, run the tests and rebuild the update ZIP.
 Tax search adds no new Python dependencies.
+
+### Sales tie-out and risk findings
+
+Control Center → Financial audit → **Tax risk finding** (or
+`python3 sales_reconciliation.py "<company folder>" out.xlsx`) compares one year of
+sales across the sales listing, GL, the 12 SR returns, the annual TOI and bank
+statements, and lists risk findings with severity, amount, evidence and a suggested
+audit procedure. Needs Sales, GL and Bank **Excel** files (convert PDFs first); SR and TOI
+are used when present. The year is taken from the sales listing; bank USD credits are
+converted at 4,000 KHR/USD (`--fx`). **Export this report** saves the workbook where you
+choose. Bank cash-in is a reasonableness check, not a tie-out.
+
+### Viewing GL, Sales and Bank data
+
+Control Center → Financial audit → **Sales**, **General ledger**, **Bank** (also Trial
+balance, A/R, Expense) now open the actual rows from the Excel/CSV files in that folder.
+Use **Find** (all words must match; pick a column to search just that one), the **Month**
+list, and click any column heading to sort (click again to reverse). Number columns accept
+`>1000000`, `<=500`, `100..200`. A green SUM bar shows the row count and totals of the
+filtered rows; **Export this report** saves the filtered rows to Excel. All bank files are
+aligned into one list with a **Type** column that classifies each credit (foreign
+remittance, in-house transfer, NBC transfer, interest...). A folder with only PDFs still
+shows the readiness list.
+
+### Pick a value (account, buyer, bank account)
+
+On Sales, General ledger, Bank, Trial balance, A/R and Expense, choose a **Column**, then a
+**Value** from the list of every value in that column (for example Account Name → Cash on
+Hand, Account Code → `10201 · Vattanac Bank (USD)`, or one Bank account). Bank opens on the
+Account column, so you view and total one account at a time. Month and Find still apply on top.
+
+### Tax risk finding menu
+
+Financial audit → **Tax risk finding** lists, for the tax year of the sales listing:
+
+1. **Total sales**: per monthly tax (SR), per annual return (TOI B0), per sales listing,
+   per GL, per trial balance, each with the difference from the GL.
+2. **Total cash in and A/R**: cash-in per bank account (compared with the matching GL
+   bank account), then the A/R roll-forward (opening, invoiced, collected via bank / cash,
+   closing) and the A/R listing.
+3. **Total expense**: per PR purchase report, per TOI (B4+B5+B6 and B22), per GL (5xxxx and
+   6xxxx, income tax excluded), per trial balance.
+4. **Risk findings** with severity, amount, suggested procedure and evidence.
+
+A source that is not in the company folder shows **Not provided**; nothing is guessed. The
+Excel copy is saved with **Export this report**. Assumptions: GL expense
+accounts start with 5 or 6; TB uses its last Debit and Credit columns; the A/R listing total is
+the sum of its Balance (or Outstanding, then Amount) column; PR is compared with GL
+accounts-payable credits because purchases include inventory and assets.
+
+### Source inspect and Build all data (simple flow)
+
+1. **Select folder.** Explicitly named files in Download are organized automatically the
+   first time.
+2. **Source inspect** opens by itself. One line per source and year, with
+   ✓ ready · ⚠ usable with a note · ✗ not ready · — not provided (optional).
+   It checks the folders *and* reads every file in the same pass (the old Format summary,
+   Validate files, Import log, Results and Check source folders screens are merged into it).
+   Examples: `✓ SR 2025, 12 months (Jan–Dec)`, `⚠ SR 2024, missing Mar`,
+   `✗ WHT 2025, PDF: the monthly return must be the Excel file`, `✗ Bank, PDF: click Convert PDFs`.
+   **Show each file** lists every file with its own mark; double-click a row to open it
+   (a ✗ PDF row converts that PDF).
+3. Fix ✗ rows if you can (**Organize Download**, **Convert PDFs**, or add files and click
+   **Refresh**/Source inspect), then click **Build all data**.
+4. Build all data builds the tax reports, the first page of every sheet, the GL / Sales /
+   Bank tables and the Tax risk finding. Afterwards every menu opens without "Working…".
+   Changing the months or the "Fill blank ADT links" option builds again when needed.
+
+Finance files are **ready** when a heading row has an amount column (Amount, Debit / Credit,
+Money In / Out, Balance) and, for GL, Bank and Sales, a Date column. A PDF is ready when an
+Excel with the same name sits next to it, or when its printed total agrees with a ready
+Excel in the folder (a copy). A conversion that produced only text lines, or tables without
+an amount column, stays ✗ with the reason: export that report from the accounting system as
+Excel, or save a clean Excel with the PDF's name in the same folder. Two files with the same
+rows and total are flagged ⚠ so totals are not doubled.
+
+**Consolidated data** now has a small filter row under the search box: Column → Value,
+Month, Clear, and a Σ total of the matching rows. Clear returns to the full sheet with its
+grand and year totals.

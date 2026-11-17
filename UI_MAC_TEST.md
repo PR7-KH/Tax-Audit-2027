@@ -2,7 +2,7 @@
 
 ## Install this update
 
-Back up the working app folder. Unzip the update bundle and copy **all fifteen
+Back up the working app folder. Unzip the update bundle and copy **all nineteen
 files, including the assets folder**, into that folder, replacing matching files. Keep templates, company data,
 other Python modules and source workbooks in place.
 
@@ -32,9 +32,9 @@ not match accidentally.
 
 Select the **company folder containing Download**, not Download itself.
 Automatic setup can run when only Info/TOI reference folders exist. Existing
-operational tax/finance folders disable automatic setup; Source overview →
+operational tax/finance folders disable automatic setup; Source inspect →
 **Organize Download** explicitly imports additional files without replacing
-existing files. Import log only displays results.
+existing files. Files it could not place are listed under Download with the reason.
 
 | Filename token | Destination |
 | --- | --- |
@@ -52,7 +52,7 @@ existing files. Import log only displays results.
 
 Monthly tax filenames must contain exactly one 20xx year. Unknown/ambiguous
 names, missing tax years, unsupported extensions and conflicts stay in Download
-and appear in Import log. Bytes are verified before deleting a moved source;
+and are listed under Download in Source inspect. Bytes are verified before deleting a moved source;
 `.tax-audit-imports.jsonl` records destinations and hashes. Existing Info,
 Information and other company files remain intact.
 
@@ -125,10 +125,10 @@ uses LibreOffice independently.
 ## Target-folder validation, conversion and search
 
 Validation and PDF-to-Excel conversion consider recognized tax/finance folders,
-not unrelated company folders. Convert selected row processes a folder/year or
-individual PDF; Convert all target PDFs processes every recognized target.
-Source overview refreshes after completion. Results → Open Excel opens extracted
-workbooks under .pdf-extractions. `.tax-audit-conversions.json` tracks source
+not unrelated company folders. **Convert PDFs** converts every finance PDF that is
+not ready yet (double-click a ✗ PDF row for just one). Source inspect refreshes
+after completion. When the PDF holds a real table, a standard Excel with the PDF's
+name is saved next to it; raw extractions stay under .pdf-extractions. `.tax-audit-conversions.json` tracks source
 hashes and outputs, so unchanged PDFs are skipped and originals are preserved.
 
 **Converted: Excel available; review required** clears the conversion task, not
@@ -320,6 +320,6 @@ are not changed.
 ## What the import controls do
 
 **Organize Download** starts a file transfer into the appropriate source folders.
-**Import log** only displays the latest moved/skipped/error results. Clicking the
-log does not run another transfer. The on-disk .tax-audit-imports.jsonl remains the
+Source inspect then shows what is still in Download and why (for example an
+unrecognized file name). The on-disk .tax-audit-imports.jsonl remains the
 persistent transfer record.
