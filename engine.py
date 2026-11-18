@@ -710,10 +710,15 @@ def build_workbook(company_folder, months_prior=3, link_all=False):
         info_wb = load_workbook(info_file, data_only=True)
         company = company_info(wb, info_wb, log)
         tax_paid_summary(wb, info_wb, months_prior, log)
-    if toi is not None and company is not None:
+    if toi is not None:
+        if company is None:   # the rules only need the TOI; the dashboard header shows a note
+            company = wb.create_sheet("Company Info")
+            company["A1"] = "COMPANY INFO"
+            company["A3"], company["B3"] = "Company", "Add the Info folder (company information Excel) to show the details here"
+            log.add("Audit Dashboard", "No Company Info file: built from the TOI only")
         build_adt_and_dashboard(wb, toi, company, log, link_all)
     else:
-        log.add("Audit Dashboard", "Skipped: needs both TOI file and Company Info file")
+        log.add("Audit Dashboard", "Skipped: needs the TOI file")
 
     compact_consolidation(wb, file_rows)
 

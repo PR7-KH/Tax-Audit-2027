@@ -110,8 +110,8 @@ def summary_view(an, rows, base_label):
 
 # ------------------------------------------------------------------ invoice numbers
 def inv_key(v):
-    t = re.sub(r"[^0-9A-Z]", "", str(v or "").upper())
-    return t.lstrip("0") or t
+    """Invoice number for matching: letters and digits only, leading zeros kept (000178 is not 178)."""
+    return re.sub(r"[^0-9A-Z]", "", str(v or "").upper())
 
 
 def invoice_match(sources, tol=TOL, fx=4000.0):
@@ -122,9 +122,22 @@ def invoice_match(sources, tol=TOL, fx=4000.0):
         for inv, d, party, amt in items:
             if str(inv or "").strip():
                 by[n][inv_key(inv)].append((inv, d, party, amt))
+    # compare only months that every source covers (a GL for 12 months vs SR files for 3 months)
+    covered = {n: {f"{x[1].year}-{x[1].month:02d}" for v in by[n].values() for x in v if x[1]} for n in names}
+    common = set.intersection(*covered.values()) if covered else set()
     rows, tags = [], []
     for k in sorted(set().union(*[set(by[n]) for n in names])):
+        key_months = {f"{x[1].year}-{x[1].month:02d}" for n in names for x in by[n].get(k, []) if x[1]}
+        if common and not (key_months & common):
+            continue
         present = [n for n in names if k in by[n]]
+        parties = {n: {re.sub(r"\W", "", str(x[2] or "")).upper() for x in by[n][k]} - {""} for n in present}
+        if any(len(p) > 1 for p in parties.values()):
+            first = next(by[n][k][0] for n in names if k in by[n])
+            rows.append([first[0], min(key_months) if key_months else ""] + [sum(x[3] for x in by[n][k]) if n in present else None for n in names]
+                        + [first[2], "Same number, several parties", "Not compared: the number is used by different suppliers / buyers"])
+            tags.append("even")
+            continue
         amts = {n: sum(x[3] for x in by[n][k]) for n in present}
         first = next(by[n][k][0] for n in names if k in by[n])
         months = {n: {f"{x[1].year}-{x[1].month:02d}" for x in by[n][k] if x[1]} for n in present}
@@ -150,9 +163,11 @@ def invoice_match(sources, tol=TOL, fx=4000.0):
             notes.append("repeated in " + ", ".join(n for n in present if len(by[n][k]) > 1))
         rows.append([first[0], min(mset) if mset else ""] + [amts.get(n) for n in names] + [first[2], result, "; ".join(notes)])
         tags.append("total" if result == "Agrees" else "error" if result.startswith(("Missing", "Amount")) else "warning")
-    order = {"error": 0, "warning": 1, "total": 2}
+    order = {"error": 0, "warning": 1, "total": 2, "even": 3}
     pair = sorted(zip(rows, tags), key=lambda x: (order[x[1]], x[0][1], str(x[0][0])))
-    counts = {n: (len(by[n]), sum(x[3] for v in by[n].values() for x in v)) for n in names}
+    counts = {n: (sum(1 for k, v in by[n].items() if any(f"{x[1].year}-{x[1].month:02d}" in common for x in v if x[1])),
+                  sum(x[3] for v in by[n].values() for x in v if x[1] and f"{x[1].year}-{x[1].month:02d}" in common)) for n in names}
+    counts["months compared"] = (len(common), 0)
     return [p[0] for p in pair], [p[1] for p in pair], counts
 
 
@@ -187,7 +202,11 @@ def pr_gl_invoices(root, year, tol=TOL):
     if not gl_f or not d["pr"]:
         return None, None
     gl = sr.read_gl(gl_f[0], year)
-    gl_lines = [r for r in gl if r.get("num") and (r["code"][:1] in ("5", "6") or re.search(r"payable|asset|inventor|stock", r["acct"], re.I))]
+    # bills only: expense / asset / stock debits and A/P credits; A/P debits are payments with a voucher number
+    gl_lines = [r for r in gl if r.get("num") and (
+        (r["code"][:1] in ("5", "6") and r["debit"] > 0) or
+        (re.search(r"payable", r["acct"], re.I) and r["credit"] > 0) or
+        (re.search(r"asset|inventor|stock", r["acct"], re.I) and r["debit"] > 0))]
     if not gl_lines:
         return None, None
     pr = read_pr_rows(d["pr"], year)
@@ -281,7 +300,8 @@ def build_revenue(company_folder, year=None, tol=TOL):
         rows, tags, counts = invoice_match(sources, tol)
         an.view("Invoice match (SR, listing, GL)", ["Invoice", "Month"] + [f"{n} amount" for n in sources] + ["Buyer", "Result", "Note"],
                 rows, tags, money=list(range(2, 2 + len(sources))), month_col=1,
-                desc="Every invoice number found in any source. " + "; ".join(f"{n}: {c[0]:,} invoices, {c[1]:,.0f}" for n, c in counts.items()))
+                desc=f"Invoice numbers of the {counts['months compared'][0]} month(s) every source covers. "
+                     + "; ".join(f"{n}: {c[0]:,} invoices, {c[1]:,.0f}" for n, c in counts.items() if n != "months compared"))
     if sources:
         gaps = invoice_gaps(sources)
         an.view("Invoice number gaps", ["Source", "Series (prefix)", "First", "Last", "Invoices", "Missing numbers", "Missing (first 40)", "Duplicates"],
@@ -447,7 +467,8 @@ def build_expense(company_folder, year=None, tol=TOL):
         an.view("PR vs GL invoices", ["Invoice", "Month", "PR amount", "GL amount", "Supplier", "Result", "Note"], rows, tags,
                 money=[2, 3], month_col=1,
                 desc="Each purchase invoice in PR matched to the GL by invoice number: same month and amount expected. "
-                     + "; ".join(f"{n}: {c[0]:,} invoices" for n, c in counts.items()))
+                     + f"Months compared: {counts['months compared'][0]}. "
+                     + "; ".join(f"{n}: {c[0]:,} invoices" for n, c in counts.items() if n != "months compared"))
     elif pr is not None and gl is not None:
         an.add_note("PR vs GL invoices: the GL has no invoice number column (Num / Invoice / Reference) on expense or payable lines.")
     if pr is not None:
