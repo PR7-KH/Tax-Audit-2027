@@ -236,7 +236,10 @@ def inspect(company_folder, import_results=None):
                 filerow(m, tax, year or "(no year folder)", p, r)
                 if m == BAD:
                     problems.append(f"{p.name}: {r}")
-            dup = [MONTHS[k - 1] for k, n in Counter(months).items() if n > 1]
+            # one month in several parts ("..._01_2025.xlsx", "..._01_2025 (1).xlsx") is normal: not a duplicate
+            stems = Counter((file_month(p.name, year), re.sub(r"\s*\(\d+\)$", "", p.stem)) for p in paths if p.suffix.lower() == ".xlsx")
+            parts = {k[0] for k, n in stems.items() if n > 1}
+            dup = [MONTHS[k - 1] for k, n in Counter(months).items() if n > 1 and k not in parts]
             if problems:
                 mark = BAD
                 remark = f"{len(problems)} of {len(paths)} file(s) not ready. " + problems[0]
@@ -328,7 +331,7 @@ def inspect(company_folder, import_results=None):
         tp_rows, tp_dir = [], None
     years = sorted({r[0] for r in tp_rows})
     if tp_dir is None:
-        frow(NOTE if not years else READY, "Tax Paid", "All", [],
+        frow(NONE if not years else READY, "Tax Paid", "All", [],
              (f"Uses Info Sheet2 / Sheet3: {', '.join(map(str, years))}" if years else
               "Not provided (optional): add a 'Tax Paid' folder with the GDT Payment History (PDF or Excel)"), root)
     else:

@@ -351,3 +351,13 @@ only purchases not declared or partly declared are raised. The Result column say
   Tax Paid Summary with "Months of newest year") and Paid vs declared; no search boxes.
 * **Audit Dashboard**: the view is called **Tax Risk Overview**; overview and area rows use a larger font;
   **double-click a row** to open the menu and tab in its "Where to look" column.
+
+### Sample files and real-layout fixes
+
+`samples/Company XYZ/` holds one anonymous real file per target folder (PR, SR, TOS, WHT, TOI, GL); see
+`samples/README.md`. Make your own with `python3 scripts/make_sample.py "<company folder>" "<output>"`.
+Fixes from the real files: the TOI tax year is read from Step 1 (the file name has the filing date);
+the 1 % minimum-tax check is skipped when Step 1 says proper accounting records are kept; Revenue / Expense
+use the TOI year; the GL "Reference No." column is the invoice number; "Direct Labor" counts as salary;
+only 1xxxx accounts are cash / bank; TOS months filed in parts (`(1)`, `(2)`) are not duplicates; TOS vs GL
+salary compares the same months.

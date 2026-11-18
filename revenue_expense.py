@@ -19,7 +19,7 @@ import finance_view as fv
 import sales_reconciliation as sr
 
 TOL = 1000.0
-SALARY_WORDS = re.compile(r"salar|wage|payroll|bonus|ប្រាក់បៀវត្ស|ប្រាក់ឈ្នួល", re.I)
+SALARY_WORDS = re.compile(r"salar|wage|payroll|bonus|labou?r|ប្រាក់បៀវត្ស|ប្រាក់ឈ្នួល", re.I)
 
 
 def _try(an, label, fn):
@@ -49,16 +49,28 @@ def folders(root):
 
 
 def pick_year(an, d):
-    """The tax year: the sales listing's year, else the newest SR / PR year, else the GL's main year."""
+    """The tax year: the TOI year (Step 1), else the sales listing's year, else the SR / PR year with the most
+    months, else the GL's main year."""
+    try:
+        import toi_analysis as ta
+        _t, path, _e = ta.load(d["toi"].parent) if d["toi"] else (None, None, "")
+        if path is not None and ta.year_of(path):
+            return ta.year_of(path)
+    except Exception:
+        pass
     listing = _xlsx(d["sales"])
     if listing:
         rows = _try(an, "Sales listing", lambda: sr.read_sales_listing(listing[0], None)) or []
         c = Counter(r["date"].year for r in rows)
         if c:
             return max(c, key=lambda y: (c[y], y))
-    years = _years_in(d["sr"]) or _years_in(d["pr"])
-    if years:
-        return years[-1]
+    for folder in (d["sr"], d["pr"]):
+        if folder is None:
+            continue
+        import consolidate as cons
+        counts = Counter(int(y) for y, p in cons.files_in(folder) if str(y).isdigit() and aa.file_month(p.name, y))
+        if counts:
+            return max(counts, key=lambda y: (counts[y], y))
     gl = _xlsx(d["gl"])
     if gl:
         cols, rows = fv.read_rows(gl[0])

@@ -276,3 +276,21 @@ class DashboardTest(unittest.TestCase):
             self.assertEqual((key[2], key[5]), ("B48 vs A21+A22", "High"))
             overview = {r[1]: r[3] for r in rows if r[0] == "Overview"}
             self.assertEqual(overview["9. Salary tax (TOS)"], "Not run: source files missing")
+
+
+class ToiStep1Test(unittest.TestCase):
+    def test_year_from_step1_not_file_date_and_proper_books(self):
+        from openpyxl import load_workbook
+        with tempfile.TemporaryDirectory() as tmp:
+            path = make_toi(Path(tmp), name="TOI-L001-000000000_2026-04-20.xlsx")
+            wb = load_workbook(path)
+            ws = wb["step1"]
+            ws["A14"] = "ការិយបរិច្ឆេទសារពើពន្ធ (ចំនួនខែ) ៖ ១២ខែ (ចាប់ពី ខែមករា ២០២៥ ដល់ ធ្នូ ២០២៥)"
+            ws["A15"] = "ការកាន់កាប់បញ្ជិកាគណនេយ្យ ៖ កាន់កាប់បញ្ជិកាគណនេយ្យត្រឹមត្រូវ"
+            wb.save(path)
+            ta._YEAR_CACHE.clear()
+            self.assertEqual(ta.year_of(path), 2025)
+            t, _p, _e = ta.load(Path(tmp))
+            self.assertTrue(t.proper_books)
+            checks = {r[0]: r for r in ta.key_checks(t)}
+            self.assertEqual(checks["Income tax below 1 % of turnover (minimum tax)"][4], "OK")

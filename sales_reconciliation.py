@@ -183,7 +183,7 @@ def read_gl(path, year):
         "party": ["counterparty", lambda h: h == "name"], "split": ["split account"],
         "debit": ["debit"], "credit": ["credit"], "?bal": ["running balance"],
         "?num": [lambda h: h in ("num", "no", "no.", "ref", "ref.", "reference", "doc no", "doc no.", "document no", "document number",
-                                 "voucher", "voucher no") or "invoice" in h or "វិក្កយបត្រ" in h or h.startswith("ref ")]})
+                                 "voucher", "voucher no") or "invoice" in h or "វិក្កយបត្រ" in h or h.startswith(("ref ", "reference"))]})
     if not hi:
         raise ValueError(f"{Path(path).name}: cannot find Account Code / Date / Debit / Credit headings")
     rows = []

@@ -77,8 +77,8 @@ def read_step10(path):
                                                          for v in r[1:]) >= 1 and i > 0), None)
     if first_num is None:
         return None
-    heads = [" ".join(re.sub(r"\s+", " ", str(rows[i][c])) for i in range(first_num)
-                      if c < len(rows[i]) and isinstance(rows[i][c], str)) for c in range(width)]
+    heads = [" ".join(dict.fromkeys(re.sub(r"\s+", " ", str(rows[i][c])).strip() for i in range(first_num)
+                                    if c < len(rows[i]) and isinstance(rows[i][c], str))) for c in range(width)]
     add = next((c for c in range(1, width) if re.search(ADD_WORDS, heads[c], re.I)), None)
     disp = next((c for c in range(1, width) if c != add and re.search(DISPOSE_WORDS, heads[c], re.I)), None)
     if add is None:
@@ -130,12 +130,52 @@ def load(root):
     items = read_items(path)
     if not items:
         return None, path, f"{path.name}: no item codes (A0, B0 ...) found in the step sheets"
-    return Toi(items), path, ""
+    t = Toi(items)
+    t.proper_books = proper_books(path)
+    return t, path, ""
+
+
+KHMER_DIGITS = str.maketrans("០១២៣៤៥៦៧៨៩", "0123456789")
+_YEAR_CACHE = {}
+
+
+def step1_text(path):
+    from openpyxl import load_workbook
+    try:
+        wb = load_workbook(path, read_only=True, data_only=True)
+        ws = _sheet(wb, 1)
+        text = "\n".join(str(v) for r in ws.iter_rows(values_only=True) for v in r if isinstance(v, str)) if ws else ""
+        wb.close()
+        return text.translate(KHMER_DIGITS)
+    except Exception:
+        return ""
 
 
 def year_of(path):
-    m = re.search(r"20\d\d", path.stem) if path else None
-    return int(m.group(0)) if m else None
+    """Tax year of the TOI: the period in Step 1 (ការិយបរិច្ឆេទសារពើពន្ធ ... ដល់ ធ្នូ 2025); the file name often
+    carries the filing date (TOI-..._2026-04-20) instead, so it is only the fallback."""
+    if not path:
+        return None
+    key = str(path)
+    if key not in _YEAR_CACHE:
+        text = step1_text(path)
+        m = re.search(r"ការិយបរិច្ឆេទសារពើពន្ធ[^\n]*", text)
+        years = re.findall(r"(?<!\d)(20\d\d)(?!\d)", m.group(0)) if m else []
+        if not years:
+            years = re.findall(r"(?:year ended|ending)[^\n]*?(20\d\d)", text, re.I)
+        if years:
+            _YEAR_CACHE[key] = int(years[-1])
+        else:
+            m = re.search(r"20\d\d", Path(path).stem)
+            _YEAR_CACHE[key] = int(m.group(0)) if m else None
+    return _YEAR_CACHE[key]
+
+
+def proper_books(path):
+    """True when Step 1 says the company keeps proper accounting records (minimum tax then does not apply)."""
+    text = step1_text(path) if path else ""
+    m = re.search(r"ការកាន់កាប់បញ្ជិកាគណនេយ្យ[^\n]*", text)
+    return bool(m and "ត្រឹមត្រូវ" in m.group(0) and "មិន" not in m.group(0).split("៖")[-1])
 
 
 # ------------------------------------------------------------------ measures used by several views
@@ -248,7 +288,7 @@ def key_checks(t):
                 "Closing stock in the cost table differs from the balance sheet.", "Reconcile steps 6 / 7 with step 4.")
     min_tax = 0.01 * t.c("B0")
     add("Income tax below 1 % of turnover (minimum tax)", t.c("B47"), min_tax,
-        t.c("B0") > 0 and t.c("B47") + TOL < min_tax,
+        t.c("B0") > 0 and t.c("B47") + TOL < min_tax and not getattr(t, "proper_books", False),
         f"Income tax {t.c('B47'):,.0f} is below 1 % of revenue {min_tax:,.0f}.",
         "Check minimum tax / prepayment of profit tax, exemptions (QIP) and the tax computation.")
     for code, what in (("B29", "Entertainment"), ("B32", "Donations"), ("B37", "Provisions"), ("B40", "Unrealised FX loss")):
@@ -296,7 +336,8 @@ def ratio_rows(t):
     r("Profitability", "Effective tax rate", "B47 / B46", lambda f: div(f("B47"), f("B46")) if f("B46") > 0 else None,
       warn=lambda c, p: "Below the 20 % rate" if c < 0.19 else "")
     r("Profitability", "Income tax to revenue (minimum tax 1 %)", "B47 / B0", lambda f: div(f("B47"), rev(f)),
-      warn=lambda c, p: "Below 1 % of turnover" if c < 0.0099 else "")
+      warn=lambda c, p: "Below 1 % of turnover" if c < 0.0099 and not getattr(t, "proper_books", False) else "",
+      comment="Minimum tax applies only without proper accounting records (TOI Step 1).")
     r("Growth", "Revenue growth", "B0 N / B0 N-1 − 1", lambda f: None, kind="pct")
     rows[-1][3] = div(t.d("B0"), t.p("B0"))
     rows[-1][4] = None
@@ -482,7 +523,8 @@ def gl_cashflow(root, year):
     if not files or not year:
         return None
     gl = sr.read_gl(files[0], year)
-    cash_rows = [r for r in gl if (r["code"].startswith("10") or GL_CASH.search(r["acct"])) and not re.search(r"receivable|payable", r["acct"], re.I)]
+    cash_rows = [r for r in gl if r["code"][:1] == "1" and (r["code"].startswith("10") or GL_CASH.search(r["acct"]))
+                 and not re.search(r"receivable|payable", r["acct"], re.I)]
     if not cash_rows:
         return [], None, None, ["GL: no cash or bank account found (codes 10xxx, names with cash / bank)"]
     totals, counts = {}, {}
@@ -490,7 +532,7 @@ def gl_cashflow(root, year):
     for r in cash_rows:
         amt = r["debit"] - r["credit"]
         split = f"{r['split']} {r['type']}"
-        if GL_CASH.search(r["split"] or "") and not re.search(r"receivable|payable", r["split"] or "", re.I):
+        if GL_CASH.search(r["split"] or "") and not re.search(r"receivable|payable|expense|charge|fee", r["split"] or "", re.I):
             transfers += amt
             continue
         key = next(((sec, line) for sec, line, rx in GL_FLOW if re.search(rx, split, re.I)), ("A. Operating activities", "Other (check the counter-account)"))

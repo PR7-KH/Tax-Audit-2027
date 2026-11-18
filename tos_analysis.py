@@ -172,7 +172,7 @@ def analyse(files, threshold=THRESHOLD, fx=FX):
                 no_file=no_file, first=first, last=last, threshold=threshold, fx=fx, foreign=foreign)
 
 
-PAYROLL_WORDS = re.compile(r"salar|payroll|wage|bonus|ប្រាក់ខែ|ប្រាក់បៀវត្ស|ប្រាក់ឈ្នួល", re.I)
+PAYROLL_WORDS = re.compile(r"salar|payroll|wage|bonus|labou?r|ប្រាក់ខែ|ប្រាក់បៀវត្ស|ប្រាក់ឈ្នួល", re.I)
 
 
 def salary_compare(root, decl, fx=FX, tol=0.05):
@@ -245,10 +245,15 @@ def salary_compare(root, decl, fx=FX, tol=0.05):
         rows.append([f"{year}-{m:02d}", a, tax_m.get(m, 0.0), g, b, None if g is None else a - g, None if b is None else a - b, st])
         tags.append({"Agrees": "total", "Differs": "error"}.get(st, "warning"))
     tos_total = sum(tos_m.values())
-    lines = [("TOS returns (12 months, salary + fringe benefits)", tos_total)]
-    lines.append(("General ledger salary / wage accounts", sum(gl_m.values()) if gl_m is not None else None))
+    with_tos = sorted(m for m, v in tos_m.items() if v)
+    span = f"{len(with_tos)} month(s) with TOS" if len(with_tos) < 12 else "12 months"
+    lines = [(f"TOS returns ({span}, salary + fringe benefits)", tos_total)]
+    lines.append((f"General ledger salary / wage accounts (same {len(with_tos)} month(s))",
+                  sum(gl_m.get(m, 0.0) for m in with_tos) if gl_m is not None else None))
     lines.append(("TOI salary (B23 + production salary C8)", toi_salary))
-    lines.append(("Bank payroll payments (description: salary / payroll / wage)", sum(bank_m.values()) if bank_m is not None else None))
+    lines.append(("Bank payroll payments (description: salary / payroll / wage)", sum(bank_m.get(m, 0.0) for m in with_tos) if bank_m is not None else None))
+    if len(with_tos) < 12:
+        lines[2] = (lines[2][0] + " – full year, TOS has only some months", None if toi_salary is None else toi_salary)
     return year, rows, tags, lines, notes
 
 
