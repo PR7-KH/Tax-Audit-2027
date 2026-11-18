@@ -7,7 +7,7 @@ Sources (whatever exists for the company):
 Each finding: area, item, TOI code / source, finding, amount, severity, suggested action, where to look.
 
 build(folder, analyses, risk_report=None, workbook=None, calc=None) -> audit_analysis.Analysis with
-two views: "Risk summary" (flagged items only) and "ADT (all TOI items)" (every line of the template).
+two views: "Tax Risk Overview" (flagged items only) and "ADT (all TOI items)" (every line of the template).
 Nothing here touches the GUI.
 """
 import re
@@ -115,6 +115,12 @@ def build(company_folder, analyses, risk_report=None, workbook=None, calc=None):
                 if f["sev"] in ("High", "Medium"):
                     items.append([f"{f['area']}: {f['title']}", "Sales / GL / bank", _clean(f.get("evidence")), f.get("amount"), f["sev"],
                                   _clean(f.get("action")), where])
+        elif key == "an_TAXPAID":
+            a = analyses.get(key)
+            for label, status, diff in getattr(a, "findings", []) if a else []:
+                items.append([label, "Payment History vs returns", status, diff, "High" if status == "Not paid" else "Medium",
+                              "Compare the payment receipts with the return; late or missing payment means penalties.",
+                              where + " → Paid vs declared"])
         else:
             a = analyses.get(key)
             if a is not None:
@@ -124,8 +130,8 @@ def build(company_folder, analyses, risk_report=None, workbook=None, calc=None):
                         (key == "tax_risk" and risk_report is not None))
         if not items:
             continue
-        rows.append([area, "", "", f"{counts[area][0]} High, {counts[area][1]} Medium", None, "", "", ""])
-        tags.append("section")
+        rows.append([area, "", "", f"{counts[area][0]} High, {counts[area][1]} Medium", None, "", "", where.split(" → ")[0]])
+        tags.append("headline")
         items.sort(key=lambda i: (i[4] != "High",))
         for i in items:
             rows.append([area] + i)
@@ -133,15 +139,16 @@ def build(company_folder, analyses, risk_report=None, workbook=None, calc=None):
     high = sum(c[0] for c in counts.values())
     med = sum(c[1] for c in counts.values())
     overview, otags = [], []
-    overview.append(["Overview", "All areas", "", f"{high} High, {med} Medium items to check", None, "", "Start with the High items.", ""])
-    otags.append("section")
+    overview.append(["Overview", "All areas", "", f"{high} High, {med} Medium items to check", None, "",
+                     "Start with the High items. Double-click a row to open its menu.", ""])
+    otags.append("headline")
     for key, area, where in AREAS:
         h, m, ran = counts.get(area, (0, 0, False))
         overview.append(["Overview", area, "", ("Not run: source files missing" if not ran else
                                                 "No findings" if not (h or m) else f"{h} High, {m} Medium"), None,
                          "", "", where])
         otags.append("even" if not ran else "total" if not (h or m) else "error" if h else "warning")
-    an.view("Risk summary", COLUMNS, overview + rows, otags + tags, money=[4], total=False, wide=True,
+    an.view("Tax Risk Overview", COLUMNS, overview + rows, otags + tags, money=[4], total=False, wide=True,
             desc="Every flagged item from every test, in one place. Red = High, amber = Medium. Click a heading to filter.")
     an.view("ADT (all TOI items)", ["Code", "Description", "N", "N-1", "Change", "Change %", "Flag", "Tax/Audit issue (KH)", "Tax/Audit issue (EN)"],
             [r[:5] + [round(r[5] * 100, 1) if isinstance(r[5], (int, float)) else None] + r[6:] for r in adt],

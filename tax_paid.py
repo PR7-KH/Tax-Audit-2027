@@ -195,8 +195,9 @@ def _returns(root):
     return out
 
 
-def build(company_folder, tol=1000.0):
+def build(company_folder, months=3, tol=1000.0):
     root = Path(company_folder)
+    months_newest = months
     an = aa.Analysis("TAXPAID", "Tax Payment History")
     rows, folder, notes = collect(root)
     for n in notes:
@@ -290,35 +291,46 @@ def build(company_folder, tol=1000.0):
     except Exception:
         pass
 
-    # ---- summary
-    S = [["Source", (folder.name + " folder" if folder else "Info workbook") + f": {len(years)} year(s) {', '.join(map(str, years))}", None, "", "section"]]
+    # ---- the three tabs
+    an.findings = [(f"{label}: return {mon}", st, d) for label, mon, d, st in findings]
+    # 1. Detail: the statement layout, one block per year (year row with monthly totals, then each tax type)
+    det_rows, det_tags = [], []
     for y in years:
-        S.append([f"Total paid {y}", f"{sum(tot.get((y, n)) or 0 for n in names):,.0f} KHR",
-                  sum(tot.get((y, n)) or 0 for n in names), "", "even"])
-    with_tos = [r[0] for r in month_rows if r[2] > 0]
-    zero_tos = [r[0] for r in month_rows if r[2] == 0 and r[1] > 0 and with_tos and with_tos[0] < r[0] < with_tos[-1]]
-    if zero_tos:
-        S.append(["Months with payments but no salary tax", ", ".join(zero_tos[:12]), None, "Check the TOS return and payment of those months.", "warning"])
-    by_label = defaultdict(list)
-    for label, mon, diff, st in findings:
-        by_label[label].append((mon, diff, st))
-    for label, items in by_label.items():
-        S.append([f"{label}: paid ≠ declared", f"{len(items)} month(s): " + ", ".join(m for m, _d, _s in items[:8]),
-                  sum(d for _m, d, _s in items), "Compare the payment receipts with the returns; late or missing payment means penalties.",
-                  "error" if any(s == "Not paid" for _m, _d, s in items) else "warning"])
-    if not findings and cmp_rows:
-        S.append(["Payments vs returns", "All compared months agree", None, "", "total"])
-    an.view("Summary", ["Area", "Result", "Amount (KHR)", "Note / action"], S, [r[4] for r in S], money=[2], total=False,
-            desc="Tax paid per the GDT Payment History, by year, and compared with the monthly and annual returns.")
-    an.view("By year", ["Tax type", "Group"] + [str(y) for y in years] + ["Change (last year)", "Change %"], summ,
-            ["even"] * (len(summ) - 1) + ["total"], money=list(range(2, 3 + len(years))), total=False,
-            desc="Total paid per tax type and year.")
-    an.view("Monthly detail", an_detail_cols, detail, None, money=list(range(3, 16)), wide=True,
-            desc="Every tax type and month, as in the Payment History statement.")
-    an.view("By month", ["Month", "Total paid", "Salary tax", "Fringe benefit tax", "WHT", "Prepayment of income tax", "Annual income tax",
-                         "VAT", "Other"], month_rows, None, money=list(range(1, 9)), month_col=0, desc="Payments per month, by group.")
-    if cmp_rows:
-        an.view("Paid vs declared", ["Tax", "Return month", "Payment month", "Declared", "Paid", "Paid − declared", "Status"],
-                cmp_rows, cmp_tags, money=[3, 4, 5], month_col=1,
-                desc="Payment month = return month or the next month, whichever matches better (taxes are paid the month after).")
+        block = [r for r in detail if r[0] == y]
+        month_tot = [sum((r[3 + i] or 0) for r in block) for i in range(12)]
+        det_rows.append([f"Year {y}", "Total paid", ""] + month_tot + [sum(month_tot)])
+        det_tags.append("section")
+        for n, r in enumerate(block, start=1):
+            det_rows.append([n, r[16] or r[1], r[1] if r[16] else ""] + r[3:15] + [r[15]])
+            det_tags.append("odd" if n % 2 else "even")
+    # 2. Summary: the earlier Tax Paid Summary: older year all 12 months, newest year its first `months` months
+    months = max(1, min(12, int(months_newest or 12)))
+    newest, older = years[-1], (years[-2] if len(years) > 1 else None)
+    sum_rows, sum_tags, n = [], [], 0
+    seen = []
+    for r in detail:
+        if r[1] not in seen:
+            seen.append(r[1])
+    for name in seen:
+        a = next((r for r in detail if r[0] == older and r[1] == name), None) if older else None
+        b = next((r for r in detail if r[0] == newest and r[1] == name), None)
+        va = (a[15] or 0) if a else 0.0
+        vb = sum((b[3 + i] or 0) for i in range(months)) if b else 0.0
+        if not va and not vb:
+            continue
+        n += 1
+        kh = (a or b)[16]
+        sum_rows.append([n, kh or name, name if kh else "", va, vb, va + vb])
+        sum_tags.append("odd" if n % 2 else "even")
+    sum_rows.append(["", "Total", "", sum(r[3] for r in sum_rows), sum(r[4] for r in sum_rows), sum(r[5] for r in sum_rows)])
+    sum_tags.append("section")
+    an.view("Detail", ["N", "Tax type", "English name"] + [aa.MONTHS[i] for i in range(12)] + ["Total"], det_rows, det_tags,
+            money=list(range(3, 16)), total=False, wide=True, desc="As in the GDT Payment History: each year, each tax type, each month.")
+    an.view("Summary", ["N", "Tax item", "English name", f"Year {older}" if older else "Older year (none)",
+                        f"{newest} / {months} months", "Sub Total"], sum_rows, sum_tags, money=[3, 4, 5], total=False,
+            desc=f"Older year: all 12 months; newest year {newest}: first {months} months (change it in 'Months of newest year').")
+    an.view("Paid vs declared", ["Tax", "Return month", "Payment month", "Declared", "Paid", "Paid − declared", "Status"],
+            cmp_rows, cmp_tags, money=[3, 4, 5], total=False,
+            desc="Payment month = return month or the next month, whichever matches better (taxes are paid the month after). "
+                 "Compared: salary tax + FBT vs TOS, WHT vs WHT returns, prepayment vs 1 % of SR sales, annual income tax vs TOI B47.")
     return an

@@ -458,6 +458,76 @@ def _cash_rows(lines):
     return rows, tags
 
 
+GL_CASH = re.compile(r"\bcash\b|bank|petty|សាច់ប្រាក់|ធនាគារ", re.I)
+GL_FLOW = [  # (section, line, regex on the counter-account / split account name)
+    ("A. Operating activities", "Received from customers", r"receivable|\bA/?R\b|sales|revenue|income|customer|ចំណូល|លក់"),
+    ("A. Operating activities", "Paid to employees", r"salar|wage|payroll|nssf|staff|employee|bonus|បៀវត្ស"),
+    ("A. Operating activities", "Taxes paid", r"\btax|vat|wht|withholding|ពន្ធ|អាករ"),
+    ("A. Operating activities", "Interest paid / received", r"interest|ការប្រាក់"),
+    ("B. Investing activities", "Purchase / sale of long-term assets", r"fixed asset|property|plant|equipment|machine|vehicle|building|construction|"
+                                                                       r"furniture|computer|land|អចលន|ទ្រព្យសកម្មរយៈពេលវែង|ម៉ាស៊ីន"),
+    ("C. Financing activities", "Loans received / repaid", r"loan|borrowing|due to|due from|shareholder|director|related|ប្រាក់កម្ចី"),
+    ("C. Financing activities", "Capital and dividends", r"capital|share|dividend|equity|retained|ភាគហ៊ុន|មូលធន|ភាគលាភ"),
+    ("A. Operating activities", "Paid to suppliers and for expenses", r"payable|\bA/?P\b|purchase|cost|expense|supplier|rent|utilit|freight|ចំណាយ"),
+]
+
+
+def gl_cashflow(root, year):
+    """Direct cash flow from the GL: every line on a cash / bank account, classified by its counter-account.
+    Returns (lines [section, line, amount, count], opening, closing, notes) or None when there is no GL."""
+    import finance_view as fv
+    import sales_reconciliation as sr
+    gl_dir = aa.subfolder(root, {"GL", "GENERAL LEDGER", "LEDGER"})
+    files = [p for p in fv.table_files(gl_dir) if p.suffix.lower() == ".xlsx"] if gl_dir else []
+    if not files or not year:
+        return None
+    gl = sr.read_gl(files[0], year)
+    cash_rows = [r for r in gl if (r["code"].startswith("10") or GL_CASH.search(r["acct"])) and not re.search(r"receivable|payable", r["acct"], re.I)]
+    if not cash_rows:
+        return [], None, None, ["GL: no cash or bank account found (codes 10xxx, names with cash / bank)"]
+    totals, counts = {}, {}
+    transfers = 0.0
+    for r in cash_rows:
+        amt = r["debit"] - r["credit"]
+        split = f"{r['split']} {r['type']}"
+        if GL_CASH.search(r["split"] or "") and not re.search(r"receivable|payable", r["split"] or "", re.I):
+            transfers += amt
+            continue
+        key = next(((sec, line) for sec, line, rx in GL_FLOW if re.search(rx, split, re.I)), ("A. Operating activities", "Other (check the counter-account)"))
+        totals[key] = totals.get(key, 0.0) + amt
+        counts[key] = counts.get(key, 0) + 1
+    by_acct = {}
+    for r in cash_rows:
+        by_acct.setdefault(r["acct"], []).append(r)
+    opening = closing = None
+    if all(rs[0]["bal"] is not None for rs in by_acct.values()):
+        opening = sum(rs[0]["bal"] - (rs[0]["debit"] - rs[0]["credit"]) for rs in by_acct.values())
+        closing = sum(rs[-1]["bal"] for rs in by_acct.values())
+    order = [(sec, line) for sec, line, _ in GL_FLOW] + [("A. Operating activities", "Other (check the counter-account)")]
+    lines = [[k[0], k[1], totals[k], counts[k]] for k in sorted(totals, key=lambda k: (k[0], order.index(k)))]
+    notes = [f"GL cash / bank accounts: {', '.join(sorted(by_acct))}"]
+    if abs(transfers) > TOL:
+        notes.append(f"Transfers between own cash / bank accounts not netted to zero: {transfers:,.0f}")
+    return lines, opening, closing, notes
+
+
+def report_cashflow(root):
+    """Cash-flow lines from the Audit Report folder (KHR), or None."""
+    try:
+        import audit_report as ar
+        _d, files = ar.report_files(root)
+        if not files:
+            return None
+        rep = ar.parse_report(ar.read_pages(files[0]))
+        lines = [l for l in rep["lines"] if l["stmt"] == "CF"]
+        items = ar.match_items(rep["lines"])
+        pick = lambda name: sum(h["cur_k"] or 0 for h in items[name][1]) if name in items else None
+        return dict(lines=lines, op=pick("Net cash from operating activities"), inv=pick("Net cash from investing activities"),
+                    fin=pick("Net cash from financing activities"), cash_end=pick("Cash at end of year"), file=files[0].name)
+    except Exception:
+        return None
+
+
 # ------------------------------------------------------------------ analyses
 def _not_ready(an, msg):
     an.add_note(msg)
@@ -531,6 +601,57 @@ def build_cashflow(company_folder):
     rows, tags = _cash_rows(direct_lines(t, lines, tot))
     an.view("Direct method", cols, rows, tags, money=[3], total=False,
             desc="Cash received and paid, worked out from the TOI income statement, cost tables and balance-sheet changes.")
+    # ---- per GL and per audit report, then the comparison
+    gl = None
+    try:
+        gl = gl_cashflow(root, y)
+    except Exception as exc:
+        an.add_note(f"GL cash flow: {str(exc).splitlines()[0]}")
+    gl_sec = {}
+    if gl:
+        glines, g_open, g_close, gnotes = gl
+        for n in gnotes:
+            an.add_note(n)
+        grow, gtag = [], []
+        for sec in ("A. Operating activities", "B. Investing activities", "C. Financing activities"):
+            part = [l for l in glines if l[0] == sec]
+            for l in part:
+                grow.append([sec, f"{l[3]:,} GL lines", "    " + l[1], l[2], "Counter-account not recognised: look at these lines in the GL" if l[1].startswith("Other") else ""])
+                gtag.append("warning" if l[1].startswith("Other") else "even")
+            gl_sec[sec[0]] = sum(l[2] for l in part)
+            grow.append([sec, "", "Net cash from " + sec.split(". ")[1].lower(), gl_sec[sec[0]], ""])
+            gtag.append("section")
+        net = sum(gl_sec.values())
+        grow.append(["D. Cash", "", "Net increase / (decrease) in cash", net, ""]); gtag.append("section")
+        if g_open is not None:
+            grow.append(["D. Cash", "GL", "    Opening cash (running balance)", g_open, ""]); gtag.append("even")
+            grow.append(["D. Cash", "GL", "    Closing cash (running balance)", g_close, f"TOI A21+A22: {t.c('A21', 'A22'):,.0f}"]); gtag.append("even")
+            diff = g_open + net - g_close
+            grow.append(["D. Cash", "", "Difference (should be 0)", diff, "OK" if abs(diff) <= TOL else "Cash lines missing or transfers not paired"])
+            gtag.append("total" if abs(diff) <= TOL else "error")
+        gl_sec["end"] = g_close
+        an.view("Per GL (direct)", cols, grow, gtag, money=[3], total=False,
+                desc="Every GL line on cash and bank accounts, grouped by the counter-account (split). Transfers between own accounts are left out.")
+    else:
+        an.add_note("Per GL: no GL Excel with Account / Date / Debit / Credit / Split account columns for this year.")
+    rc = report_cashflow(root)
+    if rc and rc["lines"]:
+        an.view("Per audit report", ["Line", "N", "N-1", "N (KHR)", "N-1 (KHR)", "Page"],
+                [[l["label"], l["cur"], l["pri"], l["cur_k"], l["pri_k"], l["page"]] for l in rc["lines"]], None,
+                money=[1, 2, 3, 4], total=False, desc=f"Statement of cash flows read from {rc['file']}.")
+    cmp_rows, cmp_tags = [], []
+    for label, toi_v, gl_v, rep_v in (("Net cash from operating activities", tot["op"], gl_sec.get("A"), rc and rc["op"]),
+                                       ("Net cash from investing activities", tot["inv"], gl_sec.get("B"), rc and rc["inv"]),
+                                       ("Net cash from financing activities", tot["fin"], gl_sec.get("C"), rc and rc["fin"]),
+                                       ("Cash at end of year", t.c("A21", "A22"), gl_sec.get("end"), rc and rc["cash_end"])):
+        others = [v for v in (gl_v, rep_v) if v is not None]
+        ok = all(abs(v - toi_v) <= max(TOL, 0.01 * max(abs(v), abs(toi_v))) for v in others)
+        cmp_rows.append([label, toi_v, gl_v, rep_v, None if gl_v is None else gl_v - toi_v, None if rep_v is None else rep_v - toi_v,
+                         "Only TOI" if not others else "Agrees" if ok else "Differs"])
+        cmp_tags.append("even" if not others else "total" if ok else "warning")
+    an.view("Comparison", ["Item", "Per TOI (indirect)", "Per GL", "Per audit report", "GL − TOI", "Audit report − TOI", "Status"],
+            cmp_rows, cmp_tags, money=[1, 2, 3, 4, 5], total=False,
+            desc="The same totals from the three sources. GL classifies by counter-account, so small differences are normal.")
     ins = []
     def add(text, hit, action):
         if hit:

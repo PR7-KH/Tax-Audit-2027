@@ -22,19 +22,29 @@ import audit_analysis as aa
 
 TOL = 0.02   # 2 % of the PR amount is accepted as rounding / gross-up difference
 
-RATES = {"Rental": 0.10, "Service / fee": 0.15, "Interest": 0.15, "Royalty": 0.15, "Unclear": 0.15}
-NATURE = [  # (nature, regex on description + supplier name); first match wins
-    ("Excluded: fixed asset", r"\basset|equipment|machine|vehicle|\bcar\b|computer|laptop|furniture|ទ្រព្យ|ម៉ាស៊ីន|ឧបករណ៍|រថយន្ត"),
-    ("Excluded: goods / material", r"goods|material|raw\b|fabric|stock|inventory|merchandise|spare part|stationery|fuel|"
-                                   r"petrol|diesel|ទំនិញ|វត្ថុធាតុ|សម្ភារ|ប្រេង"),
-    ("Excluded: utility", r"\bedc\b|electric|electricity|water supply|ppwsa|អគ្គិសនី|ទឹកស្អាត"),
-    ("Rental", r"rent|rental|lease|leasing|ជួល"),
+RATES = {"Rental": 0.10, "Service / fee": 0.15, "Management / technical fee": 0.15, "Interest": 0.15, "Royalty": 0.15, "Unclear": 0.15}
+NATURE = [  # (nature, regex on description + supplier name); first match wins: services before goods,
+            # so "repair of a motor" or "car rental" stay WHT-type
+    ("Rental", r"\brent|rental|lease|leasing|ជួល"),
     ("Interest", r"interest|ការប្រាក់"),
     ("Royalty", r"royalt|license fee|franchise|សួយសារ"),
-    ("Service / fee", r"service|fee|consult|repair|maintenance|transport|delivery|clean|security|guard|legal|"
+    ("Management / technical fee", r"management fee|technical fee|consult|advis|ប្រឹក្សា|គ្រប់គ្រង|បច្ចេកទេស"),
+    ("Service / fee", r"service|\bfees?\b|repair|maintenance|transport|delivery|clean|security|guard|legal|"
                       r"audit|accounting|advertis|marketing|commission|training|design|install|labou?r|freight|"
-                      r"logistic|courier|agent|broker|management|សេវា|ថ្លៃ|ជួសជុល|ដឹកជញ្ជូន|ប្រឹក្សា"),
+                      r"logistic|courier|agent|broker|សេវា|ថ្លៃសេវា|ថ្លៃឈ្នួល|ជួសជុល|ដឹកជញ្ជូន|ថែទាំ|សម្អាត|យាម|កម្រៃ|ពិគ្រោះ|តម្លើង|ដំឡើង"),
+    ("Excluded: fixed asset", r"\basset|equipment|machine|vehicle|\bcar\b|computer|laptop|furniture|ទ្រព្យ|ម៉ាស៊ីន|ឧបករណ៍|រថយន្ត"),
+    ("Excluded: goods / material", r"goods|material|raw\b|fabric|stock|inventory|merchandise|spare part|stationery|fuel|"
+                                   r"petrol|diesel|ទំនិញ|វត្ថុធាតុ|សម្ភារ|សំភារ|ប្រេង|គ្រឿងសំណង់|គ្រឿងអគ្គ|គ្រឿងបន្លាស់|ដែក|ស៊ីម៉ង់|"
+                                   r"កាវ|ទុយោ|អុស|ថ្នាំ|ថង់|អំពូល|ខ្សែ|ម៉ូទ័រ|វីស|ប៉ូឡុង|ប៊ូឡុង|ពោង|ស័ង្កសី|អំបោស|ច្រាស|អាស៊ីត|"
+                                   r"ក្រដាស|អ៊ីណុក|កុងតាក់|ឥដ្ឋ|ខ្សាច់|អង្ករ|ទឹកសុទ្ធ|LED|cement|steel|pipe|paint|cable|screw"),
+    ("Excluded: utility", r"\bedc\b|electricity|water supply|ppwsa|អគ្គិសនីកម្ពុជា|ទឹករដ្ឋ|ភ្លើងរដ្ឋ|ទឹកស្អាត"),
 ]
+PARTY_EXCLUDE = [  # payees that are never WHT: checked on supplier name, TIN field and description first
+    ("Excluded: government / statutory", r"គយ|ប្រតិវេទ|រដ្ឋាករ|សន្តិសុខសង្គម|\bNSSF\b|ពន្ធដារ|ក្រសួង|រតនាគារ|ministry|customs|treasury|"
+                                         r"\bGDT\b|អគ្គិសនីកម្ពុជា|\bEDC\b|រដ្ឋាករទឹក|ppwsa"),
+    ("Excluded: staff payment (TOS)", r"WORKER|RETIRE|បៀវត្ស|បំណាច់|អតីតភាព|លាឈប់|លំហែមាតុភាព|salary|wage|severance|seniority|payroll"),
+]
+GOV_CODE = re.compile(r"^[A-Z]{3}\d{2}$")      # customs office codes such as PNH04, SHV11
 NON_TAXABLE = re.compile(r"បុគ្គល\s*មិន\s*ជាប់\s*អាករ|non[- ]?taxable\s+person|non[- ]?vat\s+person", re.I)
 TIN_FORMAT = re.compile(r"[A-Z]\d{3}\d{6,}")      # L001-100163327, K001-..., after removing - and spaces
 INDIVIDUAL = re.compile(r"individual|physical|person|natural|non[- ]?vat|non[- ]?registered|unregistered|រូបវន្ត|មិនមែន|មិនបាន", re.I)
@@ -90,7 +100,7 @@ def map_pr(labels, first_col, last_col):
         "date": _pick(low, (r"កាលបរិច្ឆេទ", r"\bdate\b"), limit=text_end),
         "invoice": _pick(low, (r"វិក្កយបត្រ", r"invoice"), limit=text_end),
         "type": _pick(low, (r"ប្រភេទ", r"\btype\b", r"status"), limit=text_end),
-        "tin": _pick(low, (r"អត្តសញ្ញាណកម្ម", r"\btin\b", r"vat ?no", r"vattin"), limit=text_end),
+        "tin": _pick(low, (r"អត្តសញ្ញាណកម្ម", r"លេខសម្គាល់", r"ចុះបញ្ជីពន្ធ", r"\btin\b", r"vat ?no", r"vattin"), limit=text_end),
         "name": _pick(low, (r"ឈ្មោះ", r"name", r"supplier"), limit=text_end),
         "desc": _pick(low, (r"បរិយាយ", r"ពិពណ៌នា", r"description", r"particular", r"detail", r"memo", r"item"), avoid=(r"ឈ្មោះ", r"name")),
         "total": first_col - 1,
@@ -104,7 +114,8 @@ def map_pr(labels, first_col, last_col):
     amount = range(first_col - 1, min(last_col, len(low)))
     cols["import"] = [i for i in amount if re.search(r"នាំចូល|import", low[i])]
     cols["vat"] = [i for i in amount if re.search(r"អាករ|\bvat\b", low[i]) and i not in cols["import"]
-                   and not re.search(r"មិន|ជាប់|non|exempt|taxable|លើកលែង|តម្លៃ|value|សរុប|total", low[i])]
+                   and not re.search(r"មិន|ជាប់|០%|0%|non|exempt|taxable|លើកលែង|value|សរុប|total", low[i])
+                   and not re.search(r"តម្លៃ(?!បន្ថែម)", low[i])]        # "តម្លៃបន្ថែម" is part of the word VAT
     cols["nonvat"] = [i for i in amount if re.search(r"មិនជាប់|non[- ]?vat|not subject|exempt|លើកលែង", low[i])]
     return cols
 
@@ -116,7 +127,7 @@ def map_wht(labels, first_col):
         "date": _pick(low, (r"កាលបរិច្ឆេទ", r"\bdate\b"), limit=end),
         "tin": _pick(low, (r"អត្តសញ្ញាណកម្ម", r"\btin\b", r"vat ?no"), limit=end),
         "name": _pick(low, (r"ឈ្មោះ", r"name", r"payee", r"recipient"), limit=end),
-        "nature": _pick(low, (r"ប្រភេទ", r"បរិយាយ", r"nature", r"type", r"description", r"income"), avoid=(r"អត្រា", r"rate"), limit=end),
+        "nature": _pick(low, (r"ប្រតិបត្តិការ", r"ប្រភេទ", r"បរិយាយ", r"nature", r"type", r"description", r"income"), avoid=(r"អត្រា", r"rate"), limit=end),
         "rate": _pick(low, (r"អត្រា", r"rate", r"%"), limit=end),
         "invoice": _pick(low, (r"វិក្កយបត្រ", r"invoice", r"\binv\b", r"លេខយោង", r"reference", r"\bref\b"),
                          avoid=(r"កាលបរិច្ឆេទ", r"date"), limit=end),
@@ -143,6 +154,12 @@ def classify(desc, name, supplier_type, vat, imported, tin="", type_column=True)
         return "Excluded: supplier type", f"Supplier type '{supplier_type or 'blank'}' is not បុគ្គលមិនជាប់អាករ"
     if not type_column and vat > 0:
         return "Excluded: VAT invoice", "VAT shown on the PR line (no supplier-type column in this PR file)"
+    party = f"{name} {tin} {desc}"
+    if GOV_CODE.match(str(tin or "").strip().upper()):
+        return "Excluded: government / statutory", f"Code {tin} (customs office / government)"
+    for label, rx in PARTY_EXCLUDE:
+        if re.search(rx, party, re.I):
+            return label, "Name / description"
     text = f"{desc} {name}".casefold()
     nature = next((n for n, rx in NATURE if re.search(rx, text, re.I)), None)
     if nature and nature.startswith("Excluded"):
@@ -317,7 +334,7 @@ def build(company_folder, tol=TOL):
         action = ("OK: declared in the WHT return" if result.startswith("Declared") else
                   "Check the invoice: if it is a service / rental from a non-VAT supplier, WHT is due" if unclear else
                   f"Ask why WHT {rate:.0%} was not declared; request the contract / invoice and payment proof")
-        results.append(dict(ym=ym, name=first["name"], tin=first["tin_text"], type=first["type"], nature=nature,
+        results.append(dict(ym=ym, inv_list=[i["invoice"] for i in items if i["invoice"]], name=first["name"], tin=first["tin_text"], type=first["type"], nature=nature,
                             n=len(items), invoices=", ".join(i["invoice"] for i in items if i["invoice"])[:120],
                             desc="; ".join(sorted({i["desc"] for i in items if i["desc"]}))[:160],
                             amount=amount, base=base, tax=tax, gap=gap, rate=rate, risk=risk,
@@ -328,8 +345,31 @@ def build(company_folder, tol=TOL):
                 x["amount"], x["base"], x["tax"], x["gap"], f"{x['rate']:.0%}", x["risk"], x["result"], x["action"]]
     RES_COLS = ["Month", "Supplier", "TIN", "Supplier type", "Nature", "Description", "PR lines", "Invoices",
                 "PR amount", "WHT base declared", "WHT declared", "Not declared", "Rate", "Estimated WHT at risk", "Result", "Suggested action"]
-    risky = sorted([x for x in results if not x["result"].startswith("Declared")], key=lambda x: (x["unclear"], -x["risk"]))
-    ok = [x for x in results if x["result"].startswith("Declared")]
+    # expense booked in the GL in an earlier month than the PR / WHT declaration = WHT declared late
+    gl_month = {}
+    try:
+        import revenue_expense as rx
+        for year in sorted({x["ym"][0] for x in results}):
+            m, _res = rx.pr_gl_invoices(root, year)
+            for k, v in (m or {}).items():
+                if v.get("GL"):
+                    gl_month[k] = min(gl_month.get(k, v["GL"]), v["GL"])
+    except Exception as exc:
+        an.add_note(f"GL months for late WHT: {str(exc).splitlines()[0]}")
+    for x in results:
+        months_gl = [gl_month[rx.inv_key(i)] for i in x["inv_list"] if gl_month and rx.inv_key(i) in gl_month]
+        x["gl_month"] = min(months_gl) if months_gl else ""
+        if x["gl_month"] and x["gl_month"] < aa.month_key(x["ym"]):
+            if x["result"].startswith("Declared"):
+                x["result"] = f"Declared late (expense in GL {x['gl_month']}, PR {aa.month_key(x['ym'])})"
+                x["tag"] = "warning"
+                x["action"] = "WHT declared late: penalty and interest for the late months; ask why the expense month differs."
+            else:
+                x["action"] += f" Expense was booked in the GL in {x['gl_month']}."
+    risky = sorted([x for x in results if not x["result"].startswith("Declared") or "late" in x["result"]],
+                   key=lambda x: (x["unclear"], -x["risk"]))
+    ok = [x for x in results if x["result"].startswith("Declared") and "late" not in x["result"]]
+    late = [x for x in results if "late" in x["result"]]
 
     # recurring suppliers not declared
     rec = defaultdict(list)
@@ -344,7 +384,7 @@ def build(company_folder, tol=TOL):
 
     # WHT declared with no PR purchase
     orphan = [[aa.month_key(w["ym"]), w["name"], w["tin_text"], w["nature"], w["rate"], w["base"], w["tax"], w["file"],
-               "No matching WHT-type purchase in PR this or last month: check the expense is recorded and the PR is complete"]
+               "Declared (no risk). No matching purchase in PR: check the expense is in the GL"]
               for w in wht if not w["used"]]
 
     # monthly summary
@@ -375,16 +415,20 @@ def build(company_folder, tol=TOL):
       len(cand), sum(l["amount"] for l in cand), "See 'PR lines classified' (filter the Nature column).", "even")
     s("Declared in WHT (OK)", f"{len(ok):,} supplier-month(s) found in the WHT return", len(ok), sum(x["amount"] for x in ok),
       "See 'Declared OK'. No action.", "total")
-    nd = [x for x in risky if not x["unclear"]]
+    nd = [x for x in risky if not x["unclear"] and "late" not in x["result"]]
     s("RISK: service / rental not declared", f"{len(nd):,} supplier-month(s)", len(nd), sum(x["risk"] for x in nd),
       "Amount = estimated WHT at risk. See 'WHT risk'.", "error" if nd else "total")
+    if late:
+        s("RISK: WHT declared late", f"{len(late):,} supplier-month(s): expense in the GL before the PR / WHT month", len(late),
+          sum(x["tax"] for x in late), "See 'WHT risk' (Declared late). Penalty and interest for the late months.", "warning")
     un = [x for x in risky if x["unclear"]]
     s("CHECK: nature unclear, not declared", f"{len(un):,} supplier-month(s) from non-VAT suppliers", len(un), sum(x["risk"] for x in un),
       "Look at the invoices: goods are not WHT; services and rental are.", "warning" if un else "total")
     s("Recurring suppliers not declared", f"{sum(1 for r in rec_rows if r[3] >= 3):,} supplier(s) in 3 or more months", len(rec_rows),
       sum(r[7] for r in rec_rows), "See 'Recurring not declared'. Request the rent / service contract.", "warning" if rec_rows else "total")
     s("WHT declared but not in PR", f"{len(orphan):,} WHT line(s)", len(orphan), sum(o[6] for o in orphan),
-      "See 'WHT not in PR'. Check the purchase is recorded.", "warning" if orphan else "total")
+      "Information only (declared, no risk): e.g. rent to individual landlords has no PR invoice. Check the GL expense.",
+      "even")
     s("Total estimated WHT at risk", "Rental 10 %, services / fees / unclear 15 % on the amount not declared", None, total_risk,
       "Estimate only: confirm resident status (non-resident 14 %) and whether the PR amount is gross or net.", "error" if total_risk else "total")
 
@@ -401,7 +445,8 @@ def build(company_folder, tol=TOL):
     an.view("Declared OK", RES_COLS, [res_row(x) for x in ok], ["total"] * len(ok), money=[8, 9, 10, 11, 13], month_col=0,
             wide=True, desc="WHT-type purchases found in the WHT return of the same or next month.")
     an.view("WHT not in PR", ["Month", "Payee", "TIN", "Nature", "Rate", "WHT base", "WHT", "File", "Note"], orphan,
-            ["warning"] * len(orphan), money=[5, 6], month_col=0, desc="WHT return lines with no WHT-type purchase in PR.")
+            ["even"] * len(orphan), money=[5, 6], month_col=0,
+            desc="Declared WHT with no matching purchase in PR (information: declared means no WHT risk). Rent to individuals often has no PR invoice.")
     an.view("PR lines classified", ["Month", "Date", "Invoice", "Supplier", "TIN", "Supplier type", "Description", "Amount", "VAT",
                                     "Nature", "Reason", "File"],
             [[aa.month_key(l["ym"]), l["date"], l["invoice"], l["name"], l["tin_text"], l["type"], l["desc"], l["amount"], l["vat"],

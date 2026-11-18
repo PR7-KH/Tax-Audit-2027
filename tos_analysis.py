@@ -23,6 +23,7 @@ from pathlib import Path
 
 import audit_analysis as aa
 
+TAXABLE_BASE = 1_500_000   # KHR (≈ USD 375): Khmer staff from this base salary usually pay tax on salary
 THRESHOLD = 4_000_000        # KHR, base salary at or below this is flagged for foreign staff
 FX = 4000.0                  # KHR per USD, for the USD column only
 KHMER_WORDS = ("khmer", "ខ្មែរ", "cambod", "កម្ពុជា")
@@ -323,6 +324,29 @@ def build(company_folder, threshold=THRESHOLD, fx=FX):
         return rows
     gapf = gap_rows(foreign)
     gapk = gap_rows(lambda p: p["group"] == "Khmer")
+    # Khmer gaps with each month's salary and tax: staff with taxable salary first, then the others
+    span_cols = [aa.month_key(ym) for ym in timeline]
+    gapk_rows, gapk_tags = [], []
+    for p in people.values():
+        if p["group"] != "Khmer" or not p["missing"]:
+            continue
+        sal = [r["salary"] for r in p["months"].values()]
+        tax = [r["tax"] for r in p["months"].values()]
+        taxable = max(sal or [0]) >= TAXABLE_BASE or sum(tax) > 0
+        cells = []
+        for ym in timeline:
+            if ym in p["months"]:
+                cells.append(f"{p['months'][ym]['salary']:,.0f} / {p['months'][ym]['tax']:,.0f}")
+            elif ym in p["missing"]:
+                cells.append("MISSING")
+            else:
+                cells.append("")
+        gapk_rows.append([p["id"], p["name"], "Taxable" if taxable else "Below tax", len(p["missing"]), aa.month_list(p["missing"]),
+                          sum(sal) / len(sal) if sal else 0, sum(tax), M(p["first"]), M(p["last"])] + cells +
+                         ["Ask why not declared in " + aa.month_list(p["missing"]) + (": salary tax may be missing" if taxable else "")])
+        gapk_tags.append("error" if taxable else "even")
+    order = sorted(range(len(gapk_rows)), key=lambda i: (gapk_rows[i][2] != "Taxable", -gapk_rows[i][5], str(gapk_rows[i][1]).casefold()))
+    gapk_rows, gapk_tags = [gapk_rows[i] for i in order], [gapk_tags[i] for i in order]
 
     # ---- 3. foreigners who stop / join
     left_rows, join_rows = [], []
@@ -484,9 +508,11 @@ def build(company_folder, threshold=THRESHOLD, fx=FX):
             desc=f"Foreign staff whose last declaration is before {M(res['last'])}: request the resignation letter.")
     an.view("3 Foreign joined", ["ID", "Name", "Nationality", "First declared", "Last declared", "Months declared", "Request"],
             join_rows, ["even"] * len(join_rows), desc=f"Foreign staff first declared after {M(res['first'])}.")
-    an.view("4 Khmer missing months", ["ID", "Name", "Nationality", "First declared", "Last declared", "Months declared",
-                                        "Missing", "Missing months", "Suggested action"], gapk, ["warning"] * len(gapk),
-            desc="Khmer staff absent in a month between their first and last declaration (leavers are not listed).")
+    an.view("4 Khmer missing months", ["ID", "Name", "Salary level", "Missing", "Missing months", "Average salary", "Tax on salary (total)",
+                                        "First declared", "Last declared"] + span_cols + ["Suggested action"], gapk_rows, gapk_tags,
+            money=[5, 6], wide=True,
+            desc=f"Khmer staff absent in a month between first and last declaration. Each month shows salary / tax. "
+                 f"Taxable (base ≥ {TAXABLE_BASE:,.0f} KHR or tax paid) first, in red; leavers are not listed.")
     an.view("Staff × month", ["ID", "Name", "Nationality", "Group", "Months", "Status"] + mcols, matrix, mtags,
             money=list(range(6, 6 + len(mcols))), wide=True, desc="Salary declared per person and month; MISSING = gap between first and last month.")
     an.view("Data checks", ["Check", "ID", "Name", "Month(s)", "Detail", "Suggested action"], checks, ["warning"] * len(checks),

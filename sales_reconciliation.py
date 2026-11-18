@@ -181,7 +181,9 @@ def read_gl(path, year):
     hi, c = _find_header(ws, {
         "code": ["account code"], "acct": ["account name"], "date": ["date"], "type": ["transaction type", "type"],
         "party": ["counterparty", lambda h: h == "name"], "split": ["split account"],
-        "debit": ["debit"], "credit": ["credit"], "?bal": ["running balance"]})
+        "debit": ["debit"], "credit": ["credit"], "?bal": ["running balance"],
+        "?num": [lambda h: h in ("num", "no", "no.", "ref", "ref.", "reference", "doc no", "doc no.", "document no", "document number",
+                                 "voucher", "voucher no") or "invoice" in h or "វិក្កយបត្រ" in h or h.startswith("ref ")]})
     if not hi:
         raise ValueError(f"{Path(path).name}: cannot find Account Code / Date / Debit / Credit headings")
     rows = []
@@ -192,7 +194,8 @@ def read_gl(path, year):
         rows.append({"code": str(r[c["code"]] or ""), "acct": str(r[c["acct"]] or ""), "date": d,
                      "type": str(r[c["type"]] or ""), "party": str(r[c["party"]] or "").strip(),
                      "split": str(r[c["split"]] or ""), "debit": _num(r[c["debit"]]), "credit": _num(r[c["credit"]]),
-                     "bal": _num(r[c["?bal"]]) if "?bal" in c and r[c["?bal"]] is not None else None})
+                     "bal": _num(r[c["?bal"]]) if "?bal" in c and r[c["?bal"]] is not None else None,
+                     "num": str(r[c["?num"]] or "").strip() if "?num" in c else ""})
     wb.close()
     return rows
 

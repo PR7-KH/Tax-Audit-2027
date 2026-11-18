@@ -105,6 +105,7 @@ ANALYSIS_BUILDERS = {
     "an_CASHFLOW": ("toi_analysis", "build_cashflow"),
 }
 EXPORT_NAME = {"mtr": "MTR_Overview"}
+NO_FILTER_BOXES = {"an_TAXPAID"}
 
 
 def fit_widths(natural, available, floor=60):
@@ -459,6 +460,7 @@ class App(tk.Tk):
             "odd": {"background": "#f2f6fa"},
             "source_link": {"foreground": "#126fa3"},
             "section": {"background": "#dce9f3", "foreground": NAVY},
+            "headline": {"background": "#cfe0ef", "foreground": NAVY, "font": (FONT, 12, "bold")},
             "total": {"background": "#d9eee7", "foreground": "#12533f"},
             "warning": {"background": "#fff1dc", "foreground": "#854c0a"},
             "error": {"background": "#fbe5e7", "foreground": "#9a293c"},
@@ -635,6 +637,10 @@ class App(tk.Tk):
         self.source_controls.pack_forget()
         self.data_controls.pack(fill="x", before=self.picker, pady=3)
         self.btn_export.set_enabled(True)
+        if key in NO_FILTER_BOXES:      # heading filters only; no Column / Value / Find boxes
+            self.data_controls.pack_forget()
+        if key == "an_TAXPAID":
+            self.tax_options.pack(fill="x", before=self.picker, pady=4)
         analysis = self.__dict__.get("analyses", {}).get((str(Path(self.folder.get())), key))
         if analysis is not None:
             self.set_picker(list(analysis.views), view, command=lambda n, k=key: self.show_analysis(k, n))
@@ -697,7 +703,7 @@ class App(tk.Tk):
         rows = [table.display(i) for i in shown]
         tags = None
         if table.row_tags:
-            tags = [table.row_tags[i] if table.row_tags[i] in ("error", "warning", "total", "section") else ("odd" if n % 2 else "even")
+            tags = [table.row_tags[i] if table.row_tags[i] in ("error", "warning", "total", "section", "headline") else ("odd" if n % 2 else "even")
                     for n, i in enumerate(shown)]
         fit = self.fit_columns
         if getattr(table, "wide", False):
@@ -827,7 +833,8 @@ class App(tk.Tk):
         import importlib
         module, fn = ANALYSIS_BUILDERS[key]
         folder = str(Path(self.job_settings[0]))
-        analysis = getattr(importlib.import_module(module), fn)(folder)
+        builder = getattr(importlib.import_module(module), fn)
+        analysis = builder(folder, months=self.job_settings[1]) if key == "an_TAXPAID" else builder(folder)
         return ("analysis", folder, key, analysis)
 
     def job_dashboard(self, prebuilt=None, risk_report=None):
@@ -922,7 +929,10 @@ class App(tk.Tk):
         except (ValueError, tk.TclError):
             messagebox.showwarning("Months", "Enter a number from 1 to 12.")
             return
-        self.open_report("tps")
+        folder = str(Path(self.folder.get()))
+        self.analyses.pop((folder, "an_TAXPAID"), None)
+        self.analyses.pop((folder, "dashboard"), None)
+        self.open_report("an_TAXPAID")
 
     def change_zoom(self, delta):
         self.zoom = max(50, min(150, self.zoom + delta))
@@ -1185,11 +1195,42 @@ class App(tk.Tk):
             self.status("Could not open source workbook: "+str(exc))
 
     def pdf_row_action(self, event):
+        if self.current and self.current.get("key") == "dashboard" and self.current.get("data"):
+            self.open_dashboard_link(event)
+            return
         if self.current and self.current.get("key") == "sources":
             row = self.tree.identify_row(event.y)
             if row:
                 self.tree.selection_set(row)
                 self.open_selected_source()
+
+    def open_dashboard_link(self, event):
+        """Double-click on a dashboard row: open the menu (and tab) named in its 'Where to look' column."""
+        row = self.tree.identify_row(event.y)
+        table = self.current_table()
+        if not row or table is None or "Where to look" not in table.columns:
+            return
+        pos = self.tree.index(row) + self.data_state.get("page", 0) * self.page_size
+        indices = self.data_state.get("indices") or []
+        if pos >= len(indices):
+            return
+        where = str(table.rows[indices[pos]][table.columns.index("Where to look")] or "")
+        if not where:
+            return
+        menu, _, view = (part.strip() for part in where.partition("→"))
+        key = next((k for kind, k, label in MENU if kind == "item" and label == menu), None)
+        if key is None:
+            self.status(f"No menu named '{menu}'.")
+            return
+        view = view or None
+        if key == "dashboard":
+            self.show_analysis("dashboard", view)
+            return
+        self.pending_view = (key, view)
+        self.open_report(key)
+        if not self.busy and key.startswith("an_") and view:
+            self.pending_view = None
+            self.show_analysis(key, view)
 
     # ------------------------------------------------------------ source inspect
     def inspection_ready(self):
@@ -1742,7 +1783,8 @@ class App(tk.Tk):
                     _k, folder, key, analysis = msg
                     self.analyses[(folder, key)] = analysis
                     if (self.current or {}).get("key") == key and folder == str(Path(self.folder.get())):
-                        self.show_analysis(key)
+                        pending = self.__dict__.pop("pending_view", None)
+                        self.show_analysis(key, pending[1] if pending and pending[0] == key else None)
                         self.status(analysis.headline() + ". Pick a view above; click a column heading to filter. "
                                     "Export this report saves every view to Excel." +
                                     (" Notes: " + "; ".join(analysis.notes[:2]) if analysis.notes else ""))

@@ -329,3 +329,25 @@ accounts, TOI (B23 + C8) and bank payroll payments; WHT candidates must have sup
 month before to three months after the purchase; (2) TIN or name in the same month; (3) TIN or name in
 the next one or two months. Fully declared purchases go to "Declared OK" (no risk, not on the dashboard);
 only purchases not declared or partly declared are raised. The Result column says how it was matched.
+
+### Update: real PR / WHT layouts, invoice reconciliation, GL cash flow
+
+* **WHT** uses the GDT PR layout (TIN in "លេខសម្គាល់ចុះបញ្ជីពន្ធដា", supplier type column, VAT columns
+  "អាករលើតម្លៃបន្ថែម"). Government and statutory payees (customs offices such as PNH04 / SHV11, NSSF, GDT,
+  EDC, water authority), staff payments (seniority, bonus, maternity, retirement) and goods (Khmer item
+  words: cement, steel, pipes, electrical parts …) are excluded. WHT declared with no PR purchase (e.g.
+  rent to individual landlords) is information only. If the GL booked an expense in an earlier month than
+  the PR / WHT declaration (same invoice number), it is raised as **WHT declared late**.
+* **Revenue → Invoice match (SR, listing, GL)**: every invoice number in any source; missing in SR /
+  listing / GL, amount differs (US$ × 4,000 recognised), different month, repeated. **Invoice number
+  gaps**: numbers skipped in each series, and duplicates. The GL needs a Num / Invoice / Reference column.
+* **Expense → PR vs GL invoices**: each PR invoice matched to the GL by invoice number (same month and
+  amount expected).
+* **Cash flow**: Indirect and Direct (TOI), **Per GL (direct)** from the cash and bank accounts classified
+  by counter-account, **Per audit report**, and a **Comparison** of the three.
+* **TOS → 4 Khmer missing months** shows salary / tax for every month; staff with taxable salary (base
+  ≥ 1,500,000 KHR or tax paid) first, in red.
+* **Tax Payment History** has three tabs: Detail (as the Payment History statement), Summary (the earlier
+  Tax Paid Summary with "Months of newest year") and Paid vs declared; no search boxes.
+* **Audit Dashboard**: the view is called **Tax Risk Overview**; overview and area rows use a larger font;
+  **double-click a row** to open the menu and tab in its "Where to look" column.

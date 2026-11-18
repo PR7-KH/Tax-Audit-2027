@@ -250,8 +250,10 @@ class TaxPaidTest(unittest.TestCase):
             (root / "Info").mkdir()
             wb.save(root / "Info" / "info.xlsx")
             an = tp.build(root)
-            detail = an.views["Monthly detail"].rows
-            self.assertEqual(detail[0][1], "Salary Tax")
+            detail = an.views["Detail"].rows
+            self.assertEqual(detail[0][0], "Year 2025")
+            self.assertEqual(detail[1][1:3], ["ពន្ធលើប្រាក់បៀវត្ស", "Salary Tax"])
+            self.assertEqual(list(an.views), ["Detail", "Summary", "Paid vs declared"])
             cmp_ = an.views["Paid vs declared"].rows
             self.assertTrue(any(r[6] == "Agrees" for r in cmp_))
             self.assertTrue(any(r[6] != "Agrees" for r in cmp_))   # later months declared less (staff left)
@@ -266,7 +268,7 @@ class DashboardTest(unittest.TestCase):
             an = {"an_RATIO": ta.build_ratios(root), "an_CASHFLOW": ta.build_cashflow(root)}
             report = {"findings": [{"sev": "High", "area": "Sales", "title": "SR below GL", "amount": 5, "evidence": "x", "action": "y"}]}
             dash = rd.build(root, an, report)
-            rows = dash.views["Risk summary"].rows
+            rows = dash.views["Tax Risk Overview"].rows
             areas = {r[0] for r in rows}
             self.assertIn("1. TOI key risk checks", areas)
             self.assertIn("6. Sales tie-out (tax risk finding)", areas)

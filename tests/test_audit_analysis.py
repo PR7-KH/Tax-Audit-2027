@@ -311,3 +311,80 @@ class WhtInvoiceMatchTest(unittest.TestCase):
             self.assertEqual(risk, ["MR. B"])                      # only the undeclared purchase is raised
             self.assertTrue(wht_analysis.same_invoice("INV-001", "001"))
             self.assertFalse(wht_analysis.same_invoice("1001", "001"))
+
+
+SR_HEAD = ["ល.រ", "កាលបរិច្ឆេទ", "លេខវិក្កយបត្រ", "D", "E", "F", "ឈ្មោះអ្នកទិញ", "តម្លៃសរុបលើវិក្កយបត្រ", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S"]
+GL_HEAD_NUM = ["Account Code", "Account Name", "Date", "Transaction Type", "Num", "Name / Counterparty", "Split Account", "Debit", "Credit", "Running Balance"]
+
+
+def make_invoice_company(root):
+    from datetime import date as _d
+    for m, invs in ((1, [("1001", 100_000), ("1002", 200_000)]), (2, [("1004", 400_000)])):         # 1003 not declared in SR
+        d = root / "SR" / "2025"; d.mkdir(parents=True, exist_ok=True)
+        wb = Workbook(); ws = wb.active
+        ws.append(["SR"]); ws.append(SR_HEAD); ws.append([None]); ws.append([None])
+        for n, (inv, amt) in enumerate(invs, 1):
+            ws.append([n, f"2025-{m:02d}-10", inv, None, None, None, "ACME", amt] + [0] * 11)
+        wb.save(d / f"SR_{m:02d}_2025.xlsx")
+    (root / "Sales").mkdir()
+    wb = Workbook(); ws = wb.active
+    ws.append(["No", "Date", "Invoice", "Buyer Name", "Total Amount"])
+    for n, (dt, inv, amt) in enumerate((("2025-01-10", "1001", 100_000), ("2025-01-10", "1002", 200_000), ("2025-02-03", "1003", 300_000),
+                                        ("2025-02-10", "1004", 400_000)), 1):
+        ws.append([n, dt, inv, "ACME", amt])
+    wb.save(root / "Sales" / "sales.xlsx")
+    (root / "GL").mkdir()
+    wb = Workbook(); ws = wb.active; ws.title = "GL Transactions"
+    ws.append(GL_HEAD_NUM)
+    for dt, num, amt in ((_d(2025, 1, 10), "1001", 100_000), (_d(2025, 1, 10), "1002", 250_000), (_d(2025, 2, 3), "1003", 300_000)):
+        ws.append(["40101", "Sales of Goods", dt, "Invoice", num, "ACME", "Accounts Receivable", 0, amt, None])
+    ws.append(["61200", "Rental expense", _d(2025, 1, 31), "Bill", "R-001", "MR. A", "Accounts Payable", 3_000_000, 0, None])
+    ws.append(["20100", "Accounts Payable", _d(2025, 1, 31), "Bill", "R-001", "MR. A", "Rental expense", 0, 3_000_000, None])
+    wb.save(root / "GL" / "gl.xlsx")
+    for kind, m in (("PR", 1), ("PR", 2), ("WHT", 1), ("WHT", 2)):
+        d = root / kind / "2025"; d.mkdir(parents=True, exist_ok=True)
+        wb = Workbook(); ws = wb.active
+        ws.append([kind]); ws.append(PR_HEAD if kind == "PR" else WhtInvoiceMatchTest.WHT_HEAD_INV); ws.append([None]); ws.append([None])
+        if kind == "PR" and m == 2:
+            ws.append([1, "2025-02-05", "R-001", "បុគ្គលមិនជាប់អាករ", "", "MR. A", 3_000_000, 3_000_000, 0, 0, 0, 0, 0, 0, 0, "Office rental"])
+        if kind == "WHT" and m == 2:
+            ws.append([1, "2025-02-25", "R-001", "", "MR. A", "Rental", "10%", None, None, 3_000_000, 300_000])
+        wb.save(d / f"{kind}_{m:02d}_2025.xlsx")
+
+
+class InvoiceReconciliationTest(unittest.TestCase):
+    def test_sales_invoices_across_sr_listing_gl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); make_invoice_company(root)
+            an = rx.build_revenue(root, year=2025)
+            m = {r[0]: r for r in an.views["Invoice match (SR, listing, GL)"].rows}
+            self.assertEqual(m["1003"][-2], "Missing in SR")
+            self.assertEqual(m["1004"][-2], "Missing in GL")
+            self.assertEqual(m["1002"][-2], "Amount differs")
+            self.assertEqual(m["1001"][-2], "Agrees")
+            gaps = {(g[0], g[1]): g for g in an.views["Invoice number gaps"].rows}
+            self.assertEqual(gaps[("SR", "(numbers only)")][6], "1003")
+
+    def test_purchase_invoice_in_gl_earlier_means_late_wht(self):
+        import wht_analysis
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp); make_invoice_company(root)
+            ex = rx.build_expense(root, year=2025)
+            m = {r[0]: r for r in ex.views["PR vs GL invoices"].rows}
+            self.assertEqual(m["R-001"][5], "Different month")
+            an = wht_analysis.build(root)
+            risk = {r[1]: r for r in an.views["WHT risk"].rows}
+            self.assertIn("Declared late", risk["MR. A"][14])
+            self.assertIn("2025-01", risk["MR. A"][14])
+            self.assertFalse(an.views["Declared OK"].rows)
+
+
+class KhmerGapSalaryTest(unittest.TestCase):
+    def test_taxable_staff_listed_first_with_monthly_salary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            make_tos(Path(tmp))
+            t = ta.build(tmp).views["4 Khmer missing months"]
+            row = dict(zip(t.columns, t.rows[0]))
+            self.assertEqual((row["ID"], row["Salary level"]), ("K001", "Taxable"))    # 1,500,000 base with tax
+            self.assertEqual(row["2025-04"], "MISSING")
+            self.assertEqual(row["2025-01"], "1,500,000 / 150,000")
