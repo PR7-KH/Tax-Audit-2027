@@ -14,7 +14,7 @@ from pathlib import Path
 from openpyxl import Workbook, load_workbook
 
 PREFERRED_SHEETS = ("transaction", "sale", "ledger", "detail", "data")
-AMOUNT_WORDS = ("debit", "credit", "amount", "money in", "money out", "receipt", "payment", "sales (")
+AMOUNT_WORDS = ("debit", "credit", "amount", "money in", "money out", "receipt", "payment", "sales (", "outstanding")
 MONEY_FORMAT_WORDS = AMOUNT_WORDS + ("balance",)
 NOT_AMOUNT = ("running balance", "no", "month", "page", "row", "code", "year", "count", "txn")
 ALIASES = {

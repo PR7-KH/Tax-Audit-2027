@@ -132,3 +132,75 @@ class FitWidthsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AuditReportTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        make_toi(self.root)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_word_report_compared_with_toi(self):
+        from toi_fixture import make_audit_report
+        import audit_report as ar
+        make_audit_report(self.root, revenue_khr_m=5200)
+        an = ar.build(self.root)
+        cmp_ = {r[1]: r for r in an.views["Compare with TOI"].rows}
+        self.assertEqual(cmp_["Total assets"][6], "Agrees")
+        self.assertEqual(cmp_["Cash and bank"][3], 500 * M)                 # KHR'000 column x 1,000
+        self.assertEqual(cmp_["Cost of sales"][6], "Agrees")                 # (3,000) compared as positive
+        self.assertEqual(cmp_["Purchase of property, plant and equipment"][6], "Agrees")   # step 10
+        self.assertEqual(cmp_["Net cash from operating activities"][6], "Agrees")
+        self.assertEqual(cmp_["Revenue"][5], 200 * M)
+        self.assertTrue(cmp_["Revenue"][6].startswith("Differs"))
+        summary = {(r[0], r[1]) for r in an.views["Summary"].rows}
+        self.assertIn(("Audit opinion", "Material uncertainty – going concern"), summary)
+        self.assertEqual([n[1] for n in an.views["Notes index"].rows],
+                         ["Related party transactions", "Contingent liabilities", "Subsequent events"])
+
+    def test_parse_line_notes_and_brackets(self):
+        import audit_report as ar
+        self.assertEqual(ar.parse_line("Cost of sales 12 (750,000) (650,000) (3,000,000) (2,600,000)"),
+                         ("Cost of sales", "12", [-750000, -650000, -3000000, -2600000]))
+        self.assertEqual(ar.parse_line("Borrowings - 1,000")[2], [0.0, 1000.0])
+        self.assertIsNone(ar.parse_line("for the year ended 31 December 2025"))
+
+    def test_scanned_or_missing(self):
+        import audit_report as ar
+        an = ar.build(self.root)
+        self.assertIn("No Audit Report folder", an.views["Summary"].rows[0][1])
+        (self.root / "Audit Report").mkdir()
+        from openpyxl import Workbook  # noqa: F401
+        an = ar.build(self.root)
+        self.assertIn("no PDF or Word", an.views["Summary"].rows[0][1])
+
+
+class ArApTest(unittest.TestCase):
+    def test_listing_vs_toi_and_aging(self):
+        from toi_fixture import make_ar_ap
+        import ar_ap
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            make_toi(root); make_ar_ap(root, ar_total_m=850)
+            an = ar_ap.build(root)
+            s = {(r[0], r[1]): r for r in an.views["Summary"].rows}
+            self.assertEqual(s[("A/R", "TOI A18")][3], 50 * M)               # listing 850 vs TOI 800
+            self.assertEqual(s[("A/R", "TOI A18")][5], "Differs")
+            self.assertEqual(s[("A/P", "TOI A46")][5], "Agrees")
+            self.assertEqual(s[("A/P", "Aging")][4], 400 * M)                 # 2023 invoice is over a year old
+            ap = {r[0]: r for r in an.views["A/P by supplier"].rows}
+            self.assertIn("Over 1 year", ap["OLD VENDOR"][-1])
+            ar = {r[0]: r for r in an.views["A/R by customer"].rows}
+            self.assertEqual(ar["BETA CO"][-3], 200 * M)                      # 'Over 365 days' bucket
+
+
+class DownloadRoutingTest(unittest.TestCase):
+    def test_new_targets(self):
+        import input_tools as it
+        self.assertEqual(it.classify_download("Audit Report 2025.pdf")[0], "Audit Report")
+        self.assertEqual(it.classify_download("Audited financial statements.docx")[0], "Audit Report")
+        self.assertEqual(it.classify_download("AP aging 2025.xlsx")[0], "AP")
+        self.assertIsNone(it.classify_download("memo.docx")[0])

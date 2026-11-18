@@ -15,6 +15,8 @@ FILES = (
     'revenue_expense.py',
     'wht_analysis.py',
     'toi_analysis.py',
+    'audit_report.py',
+    'ar_ap.py',
     'calc.py',
     'rules/ADT_rules_template.xlsx',
     'scripts/build_adt_template.py',

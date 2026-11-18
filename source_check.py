@@ -33,7 +33,7 @@ TOTAL_ROW = re.compile(r"^\s*(grand\s+)?(sub\s*)?total\b|^\s*សរុប", re.I
 
 
 def _fmt(paths):
-    labels = {".xlsx": "Excel", ".xlsm": "Excel", ".xls": "Old Excel", ".pdf": "PDF", ".csv": "CSV"}
+    labels = {".xlsx": "Excel", ".xlsm": "Excel", ".xls": "Old Excel", ".pdf": "PDF", ".csv": "CSV", ".docx": "Word"}
     c = Counter(labels.get(p.suffix.lower(), "Other") for p in paths)
     return ", ".join(f"{n} {k}" for k, n in sorted(c.items())) or "—"
 
@@ -286,6 +286,39 @@ def inspect(company_folder, import_results=None):
             frow(READY, name, "All", paths, f"Uses {ok.name}" + (f" (+{len(xl) - 1} more Excel, only the first is used)" if len(xl) > 1 else ""), directory)
         else:
             frow(BAD, name, "All", paths, f"No usable {need}" if paths else "Folder is empty", directory)
+
+    # ---- audited financial statements (optional): PDF with text, or Word
+    try:
+        import audit_report
+        ar_dir, ar_files = audit_report.report_files(root)
+    except Exception:
+        ar_dir, ar_files = None, []
+    if ar_dir is None:
+        frow(NONE, "Audit Report", "All", [], "Not provided (optional): add an 'Audit Report' folder with the audited financial statements (PDF or Word)", root)
+    else:
+        good = []
+        for p in ar_files:
+            try:
+                if p.suffix.lower() == ".pdf":
+                    import pdfplumber
+                    with pdfplumber.open(str(p)) as pdf:
+                        chars = sum(len((pg.extract_text() or "").strip()) for pg in pdf.pages[:6])
+                    m, r = (READY, f"Text PDF, {len(pdf.pages)} page(s)") if chars >= 300 else \
+                           (BAD, "Scanned PDF (no text): ask for the text PDF or Word version, or OCR it")
+                else:
+                    m, r = READY, "Word document"
+            except Exception as exc:
+                m, r = BAD, "Cannot read: " + str(exc).splitlines()[0]
+            filerow(m, "Audit Report", "All", p, r)
+            if m == READY:
+                good.append(p)
+        others = [p for p in visible_files(ar_dir) if p not in ar_files]
+        for p in others:
+            filerow(NOTE, "Audit Report", "All", p, "Not used: put the report as PDF or Word (.docx)")
+        if good:
+            frow(READY, "Audit Report", "All", ar_files, f"Uses {good[0].name}" + (f" (+{len(ar_files) - 1} more: keep only the final report)" if len(ar_files) > 1 else ""), ar_dir)
+        else:
+            frow(BAD, "Audit Report", "All", ar_files, "No readable PDF / Word report" if ar_files else "Folder has no PDF or Word file", ar_dir)
 
     # ---- financial folders
     for key, (label, _names) in engine.FINANCE_FOLDERS.items():

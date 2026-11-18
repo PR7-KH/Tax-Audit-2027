@@ -24,6 +24,7 @@ def target_folders(folder):
     root = Path(folder)
     aliases = {name: name for name in engine.cons.LAYOUTS}
     aliases.update({'TOI': 'TOI', 'INFO': 'Info'})
+    aliases.update({name: 'Audit Report' for name in engine.AUDIT_REPORT_NAMES})
     for label, names in engine.FINANCE_FOLDERS.values():
         aliases.update({name: label for name in names})
     return [(aliases[d.name.upper()], d, d.name.upper() in engine.cons.LAYOUTS)
@@ -321,10 +322,15 @@ def classify_download(path):
         'PR': r'\b(purchases?|pr)\b', 'SR': r'\b(sales?|sr)\b',
         'TOS': r'\b(salary tax|salarytax|tos)\b', 'WHT': r'\b(withholding tax|withholdingtax|wht)\b',
         'GL': r'\b(gl|general ledger)\b', 'TB': r'\b(tb|trial balance)\b',
-        'BANK': r'\b(bank|bank statement)\b', 'AR': r'\b(ar|receivables?|a r)\b',
+        'BANK': r'\b(bank|bank statement)\b', 'AR': r'\b(ar|receivables?|a r)\b', 'AP': r'\b(ap|payables?|a p)\b',
+        'Audit Report': r'\b(audit report|audited|auditor s report|financial statements?|afs)\b',
         'EXPENSE': r'\b(expenses?|purchase ledger)\b', 'TOI':r'\btoi(?:\d[a-z0-9]*|x[a-z0-9]*)?\b', 'Info':r'\b(company info|info)\b',
     }
     found=[name for name,pattern in patterns.items() if re.search(pattern,text)]
+    if 'Audit Report' in found:   # "audited sales ..." etc. belong to the audit report
+        found=['Audit Report']
+    elif Path(path).suffix.lower()=='.docx':
+        return None,None,'Word files are only used for the audit report (name it Audit Report ...)'
     # Explicit purchase-ledger files are finance, not tax purchases.
     if 'EXPENSE' in found and 'purchase ledger' in text and 'PR' in found:
         found.remove('PR')
@@ -361,7 +367,7 @@ def organize_downloads(folder, allow_existing=False):
         rel=source.relative_to(root)
         if source.is_symlink() or not source.resolve().is_relative_to(download.resolve()):
             reports.append([str(rel),'','SKIPPED: linked file outside Download scope']);continue
-        if source.suffix.lower() not in engine.FIN_EXT:
+        if source.suffix.lower() not in engine.FIN_EXT | {'.docx'}:
             reports.append([str(rel),'','SKIPPED: unsupported format']);continue
         target,year,reason=classify_download(source)
         if not target:

@@ -59,7 +59,7 @@ row). Raw extractions stay under `.pdf-extractions` with source-hash history in
 `.tax-audit-conversions.json`; when the PDF holds a real table, a standard Excel with the
 **same name as the PDF** is saved next to it and the row turns ✓. See "Source inspect" below.
 
-The update bundle includes twenty-eight files, including the Tax Audit Tools/search
+The update bundle includes thirty files, including the Tax Audit Tools/search
 modules, `assets/meeting_note_template.docx` and `assets/tax_laws.json`.
 Copy the **assets folder** too, and rerun
 the Mac installer to install python-docx. Selecting a new
@@ -275,3 +275,25 @@ income statement: profit, depreciation, working-capital changes, asset purchases
 when its "purchase / addition" column is recognised, otherwise change in long-term assets plus
 depreciation, with a balancing disposals line), loans, capital and derived dividends, ending with the
 cash per balance sheet and a difference that should be 0. Findings explain unusual patterns.
+
+### New folders: AP and Audit Report
+
+Next to AR, a company folder can now hold **AP** (supplier listing / aging, Excel or CSV) and **Audit
+Report** (the audited financial statements, **PDF or Word .docx**). Organize Download routes files named
+`AP ...` / `Payables ...` and `Audit Report ...` / `Audited ...` / `Financial statements ...` / `AFS ...`.
+Source inspect shows both; a scanned PDF (no text) is marked ✗: ask for the text PDF or the Word file,
+or OCR it. No conversion to Word is needed for a normal (text) PDF.
+
+* **Financial audit → A/P**: the A/P rows with heading filters, like A/R.
+* **Audit analysis → Audit report vs TOI**: reads the statement of financial position, profit or loss
+  and cash flows (US$ and / or KHR columns, KHR'000, note numbers, wrapped labels), converts US$ with the
+  rate printed in the report (else 4,000), and compares about 30 items with the TOI for N and N-1: totals,
+  PPE, stock, receivables, cash, capital, retained earnings, related-party and other payables, revenue,
+  cost of sales, gross profit, expenses, finance costs, profit before / after tax, income tax, and the
+  TOI cash flow (operating, investing, financing, asset purchases vs step 10, depreciation, closing cash).
+  It shows the audit opinion (unmodified, qualified, adverse, disclaimer, going concern, emphasis of
+  matter), a notes index, keyword hits (related parties, contingencies, subsequent events, tax
+  assessments, guarantees, restatements, dividends) and the full text for searching.
+* **Audit analysis → A/R & A/P**: listing totals vs TOI (A18 / A46), GL closing balances and the audited
+  figure; aging from the listing's bucket columns (or from invoice dates to 31 December); per customer /
+  supplier with balances over one year, credit / debit balances and large shares flagged.

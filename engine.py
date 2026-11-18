@@ -491,9 +491,12 @@ FINANCE_FOLDERS = {
     "BANK": ("Bank", {"BANK", "BANKS", "BANK STATEMENT", "BANK STATEMENTS"}),
     "SALES": ("Sales", {"SALES", "SALE", "REVENUE"}),
     "AR": ("A/R", {"AR", "A-R", "A_R", "A/R", "RECEIVABLE", "RECEIVABLES"}),
+    "AP": ("A/P", {"AP", "A-P", "A_P", "A/P", "PAYABLE", "PAYABLES"}),
     "EXPENSE": ("Expense", {"EXPENSE", "EXPENSES", "PURCHASE LEDGER"}),
 }
 FINANCE_NAMES = set().union(*(v[1] for v in FINANCE_FOLDERS.values()))
+AUDIT_REPORT_NAMES = {"AUDIT REPORT", "AUDIT_REPORT", "AUDIT-REPORT", "AUDITREPORT", "AUDIT REPORTS", "AUDITED FS",
+                      "AUDITED FINANCIAL STATEMENTS", "FINANCIAL STATEMENTS", "AFS"}
 FIN_EXT = {".xlsx", ".xlsm", ".xls", ".csv", ".pdf"}
 
 
@@ -649,7 +652,7 @@ def build_workbook(company_folder, months_prior=3, link_all=False):
     tmp = tdir / "consolidated.xlsx"
     original_hidden = cons.hidden
     # Finance folders (GL, Bank, ...) are not tax data: keep them out of the tax consolidation.
-    cons.hidden = lambda p: original_hidden(p) or (p.parent == root and p.name.upper() in (FINANCE_NAMES | {"AUDIT_TOOLS","TOI_PDFS"}))
+    cons.hidden = lambda p: original_hidden(p) or (p.parent == root and p.name.upper() in (FINANCE_NAMES | AUDIT_REPORT_NAMES | {"AUDIT_TOOLS","TOI_PDFS"}))
     try:
         with open(tdir / "consolidated.log", "w", encoding="utf-8") as lf:
             cons.consolidate(root, tmp, lf, excel_job=True)
