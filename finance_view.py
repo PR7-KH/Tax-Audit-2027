@@ -345,7 +345,7 @@ class Table:
                 if a in cols and b in cols:
                     items.append(f"{label}{tag}: {self.money_text(cols[a] - cols[b])}")
             parts.extend(items)
-        if len(parts) == 1 and not self.amount:
+        if len(parts) == 1 and not self.amount and not self.money:
             parts.append("no amount column in this file")
         return "   |   ".join(parts)
 

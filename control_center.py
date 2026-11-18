@@ -40,6 +40,8 @@ MENU = [
     ("item", "mtr", "MTR Overview"),
     ("item", "consolidate", "Consolidated data"),
     ("item", "tps", "Tax Paid Summary"),
+    ("item", "an_RATIO", "Ratio analysis (TOI)"),
+    ("item", "an_CASHFLOW", "Cash flow (TOI)"),
     ("item", "audit_tools", "Tax Audit Tools"),
     ("group", "", "FINANCIAL AUDIT"),
     ("item", "fin_SALES", "Sales"),
@@ -77,6 +79,8 @@ SUBTITLE = {
     "log": "Warnings and corrections from the last build.",
     "an_REVENUE": "Sales per SR monthly returns, sales listing, GL, TB and TOI: year, month, invoice and buyer comparisons.",
     "an_EXPENSE": "Purchases per PR returns vs GL accounts payable, GL expense 5xxxx / 6xxxx vs TOI and TB, and TOS salary vs GL salary.",
+    "an_RATIO": "Profitability, liquidity, solvency and efficiency ratios from the TOI (N vs N-1), with key risk checks.",
+    "an_CASHFLOW": "Cash-flow statement (indirect method) from the two TOI balance sheets, the income statement and step 10 asset purchases.",
     "an_WHT": "Services, rental and fees bought from non-VAT suppliers in PR, matched with the WHT return of that month; only what is not declared is raised.",
     "an_TOS": "Salary tax risk from the monthly TOS staff lists: foreign staff ≤ 4,000,000 KHR, missing months, leavers, Khmer missing months.",
 }
@@ -85,8 +89,32 @@ ANALYSIS_BUILDERS = {
     "an_EXPENSE": ("revenue_expense", "build_expense"),
     "an_TOS": ("tos_analysis", "build"),
     "an_WHT": ("wht_analysis", "build"),
+    "an_RATIO": ("toi_analysis", "build_ratios"),
+    "an_CASHFLOW": ("toi_analysis", "build_cashflow"),
 }
 EXPORT_NAME = {"mtr": "MTR_Overview"}
+
+
+def fit_widths(natural, available, floor=60):
+    """Fit columns into the window like Excel's autofit, then share out the rest.
+    Narrow columns (numbers, codes, dates) keep their full width; only the widest text columns are
+    cut down, all to the same cap, so nothing short is truncated. Extra space is spread evenly."""
+    natural = [max(1, int(n)) for n in natural]
+    total = sum(natural)
+    if not natural:
+        return []
+    if total <= available:
+        extra = (available - total) // len(natural)
+        return [n + extra for n in natural]
+    lo, hi = 0, max(natural)
+    while lo < hi:                      # largest cap with sum(min(n, cap)) <= available
+        mid = (lo + hi + 1) // 2
+        if sum(min(n, mid) for n in natural) <= available:
+            lo = mid
+        else:
+            hi = mid - 1
+    cap = max(lo, floor)
+    return [min(n, cap) for n in natural]
 
 
 def open_path(path):
@@ -400,8 +428,10 @@ class App(tk.Tk):
         self.zoom_label = tk.Label(preview_tools, text="90%", bg="#e4edf5", fg=NAVY)
         self.zoom_label.pack(side="left")
         Btn(preview_tools, "+", lambda: self.change_zoom(10)).pack(side="left", padx=2)
-        Btn(preview_tools, "Fit columns", self.toggle_fit).pack(side="left", padx=4)
-        Btn(preview_tools, "Actual widths", self.actual_widths).pack(side="left", padx=2)
+        self.fit_btn = Btn(preview_tools, "Fit columns", self.toggle_fit)
+        self.fit_btn.pack(side="left", padx=4)
+        self.actual_btn = Btn(preview_tools, "Actual widths", self.actual_widths)
+        self.actual_btn.pack(side="left", padx=2)
         self.preview_expanded = False
         self.expand_button = Btn(preview_tools, "Expand preview", self.toggle_preview)
         self.expand_button.pack(side="left", padx=4)
@@ -434,6 +464,7 @@ class App(tk.Tk):
         self.tree.bind("<Motion>", self.mtr_link_cursor)
         self.status_lbl = tk.Label(main, text="", bg=BG, fg=MUTED, anchor="w", font=(FONT, 10))
         self.status_lbl.pack(fill="x")
+        self.mark_width_mode()
 
     # ------------------------------------------------------------ helpers
     def active_label(self):
@@ -514,7 +545,7 @@ class App(tk.Tk):
         self.folder.set("");self.months.set(3);self.link_all.set(False)
         self.partial_build=False;self.current=None;self.last_export=None;self.reset_pending=False
         self.search_index=-1;self.search_query.set("");self.search_label.config(text="")
-        self.page_size=200;self.zoom=90;self.fit_columns=True
+        self.page_size=200;self.zoom=90;self.fit_columns=True;self.mark_width_mode()
         self.toi_steps.set("1-17")
         self.toi_renderer.set("Microsoft Excel" if sys.platform in ("win32","darwin") else "LibreOffice")
         if hasattr(self,"toi_output"):self.toi_output.set("TOI_PDFs")
@@ -548,21 +579,23 @@ class App(tk.Tk):
         ids = [f"c{i}" for i in range(len(columns))]
         self.tree["columns"] = ids
         self.last_table = (columns, rows, align_right, tags)
-        scale = self.zoom / 100
-        available = max(100, self.tree.winfo_width() - 24)
-        weights = []
+        cell_font, head_font = self.table_fonts()
+        heading_extra = 46 if (self.current or {}).get("data") or (self.current or {}).get("key") == "consolidate" else 26
+        natural, anchors = [], []
         for i, name in enumerate(columns):
-            longest = max([len(str(name))] + [len(str(r[i])) for r in rows[:100] if i < len(r)])
-            weights.append(5 if name == "#" else max(9, min(longest + 2, 45)))
-        weight_total = sum(weights) or 1
-        for i, (cid, name) in enumerate(zip(ids, columns)):
-            cells = [str(r[i]) for r in rows[:100] if i < len(r) and r[i] not in (None, "")]
+            cells = [str(r[i]) for r in rows[:150] if i < len(r) and r[i] not in (None, "")]
             numeric = align_right and cells and sum(bool(NUMBER.match(c)) for c in cells) / len(cells) > 0.6
-            natural = max(55, min(max([len(name)] + [len(c) for c in cells]) * 7 + 20, 400))
-            width = max(12, int(available * weights[i] / weight_total)) if self.fit_columns else int(natural * scale)
+            longest = sorted(set(cells), key=len, reverse=True)[:25]   # measure the longest texts only
+            width = max([head_font.measure(str(name)) + heading_extra] + [cell_font.measure(c) + 18 for c in longest])
+            natural.append(min(max(width, 40), 700))
+            anchors.append("e" if numeric else "w")
+        self.natural_widths = natural
+        self.fit_active = self.fit_columns
+        available = max(200, self.tree.winfo_width() - 4)
+        widths = fit_widths(natural, available) if self.fit_columns else natural
+        for cid, name, width, anchor in zip(ids, columns, widths, anchors):
             self.tree.heading(cid, text=name)
-            self.tree.column(cid, width=width, minwidth=10,
-                             anchor="e" if numeric else "w", stretch=False)
+            self.tree.column(cid, width=width, minwidth=20, anchor=anchor, stretch=False)
         for index, r in enumerate(rows):
             values = ["" if v is None else v for v in r]
             tag = tags[index] if tags else report_row_tag(values, index)
@@ -866,11 +899,20 @@ class App(tk.Tk):
 
     def toggle_fit(self):
         self.fit_columns = True
+        self.mark_width_mode()
         self.redraw_table()
 
     def actual_widths(self):
         self.fit_columns = False
+        self.mark_width_mode()
         self.redraw_table()
+
+    def mark_width_mode(self):
+        """Show which width mode is on (the active button is dark)."""
+        for btn, on in ((getattr(self, "fit_btn", None), self.fit_columns), (getattr(self, "actual_btn", None), not self.fit_columns)):
+            if btn is not None:
+                btn.color = NAVY if on else ACCENT
+                btn.config(bg=btn.color)
 
     def toggle_preview(self):
         self.preview_expanded = not self.preview_expanded
@@ -885,15 +927,35 @@ class App(tk.Tk):
             self.report_header.pack(fill="x", before=self.picker)
             self.expand_button.config(text="Expand preview")
 
+    def table_fonts(self):
+        """The fonts the table really uses (they change with zoom), to measure text in pixels."""
+        from tkinter import font as tkfont
+
+        class Approx:                       # no Tk window (tests): about 7 px per character
+            def __init__(self, px):
+                self.px = px
+
+            def measure(self, text):
+                return len(str(text)) * self.px
+        try:
+            style = ttk.Style(self)
+        except Exception:
+            return Approx(7), Approx(8)
+        def get(name, default):
+            try:
+                return tkfont.Font(root=self, font=style.lookup(name, "font") or default)
+            except tk.TclError:
+                return tkfont.Font(root=self, font=default)
+        return get("Treeview", (FONT, 10, "bold")), get("Treeview.Heading", (FONT, 11, "bold"))
+
     def resize_preview(self, event):
-        if self.fit_columns:
-            # Resize columns only; don't rebuild thousands of table items.
-            ids = self.tree["columns"]
-            widths = [self.tree.column(cid, "width") for cid in ids]
-            total = sum(widths) or 1
-            available = max(100, event.width - 24)
-            for cid, width in zip(ids, widths):
-                self.tree.column(cid, width=max(10, int(available * width / total)))
+        # Re-fit columns only (no rebuild) when the window changes size; Actual widths stay as they are.
+        ids = self.tree["columns"]
+        natural = getattr(self, "natural_widths", None)
+        if not getattr(self, "fit_active", False) or not natural or len(natural) != len(ids):
+            return
+        for cid, width in zip(ids, fit_widths(natural, max(200, event.width - 4))):
+            self.tree.column(cid, width=width)
 
     def change_page(self, direction):
         if not self.busy and self.current and self.current.get("data") and self.current_table() is not None:

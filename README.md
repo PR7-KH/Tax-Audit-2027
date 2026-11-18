@@ -59,7 +59,7 @@ row). Raw extractions stay under `.pdf-extractions` with source-hash history in
 `.tax-audit-conversions.json`; when the PDF holds a real table, a standard Excel with the
 **same name as the PDF** is saved next to it and the row turns ✓. See "Source inspect" below.
 
-The update bundle includes twenty-four files, including the Tax Audit Tools/search
+The update bundle includes twenty-eight files, including the Tax Audit Tools/search
 modules, `assets/meeting_note_template.docx` and `assets/tax_laws.json`.
 Copy the **assets folder** too, and rerun
 the Mac installer to install python-docx. Selecting a new
@@ -245,3 +245,33 @@ filter buttons and a SUBTOTAL row that follows the Excel filter. Build all data 
   months, e.g. a landlord), **WHT not in PR**, **PR lines classified** (why each line is or is not
   WHT-type), **WHT declarations** and **Column mapping** (check this first). The nature comes from a
   description column (បរិយាយ / Description) and the supplier name; without them more lines are Unclear.
+
+### Audit Dashboard rules (ADT), Ratio analysis and Cash flow from the TOI
+
+**Fit columns / Actual widths** now measure the real text width in the table font. Fit columns keeps
+short columns (numbers, codes, dates) whole and only narrows the longest text columns; Actual widths
+shows every column at its full width (scroll sideways). The active mode's button is dark.
+
+**ADT rules template.** The Audit Dashboard is built from `rules/ADT_rules_template.xlsx`, now part
+of the app. It was generated from the ADT sheet of the V5.1 workbook with
+`python3 scripts/build_adt_template.py` (use `--input your_ADT.xlsx` to upgrade your own copy):
+your existing rules (A2–A12) are kept unchanged, every TOI item is linked for both years, Flag (J) and
+Tax/Audit Issue (K, Khmer) rules are added for the balance sheet, income statement and cost tables,
+column L gives the issue in English, and a **Key risk checks** section at the bottom tests across lines:
+profit but cash fell, debt over assets, negative gross profit, operating expenses over cost of sales or
+revenue, losses in both years, loss but cash up, related-party funding up, stock up while sales fall,
+asset purchases, balance sheet balances, debt-to-assets over 80 %, gross margin down 10 points and
+income tax below the 1 % minimum tax. Edit the template in Excel to change or add rules (use IF / AND /
+OR / N / ABS / MAX / MIN so the preview can calculate them).
+
+**Ratio analysis (TOI)** (Tax audit menu): gross / operating / net margin, cost and expenses to revenue,
+expenses to cost of sales, ROA, ROE, effective tax rate, tax to turnover, revenue and expense growth,
+current / quick / cash ratio, cash-on-hand share, debt to assets, debt to equity, equity ratio,
+related-party debt share, interest cover, A/R, inventory and payables days and asset turnover, for N
+and N-1 with flags, plus the key risk checks and every TOI item.
+
+**Cash flow (TOI)**: indirect-method cash-flow statement for year N from the two balance sheets and the
+income statement: profit, depreciation, working-capital changes, asset purchases (from **step 10**
+when its "purchase / addition" column is recognised, otherwise change in long-term assets plus
+depreciation, with a balancing disposals line), loans, capital and derived dividends, ending with the
+cash per balance sheet and a difference that should be 0. Findings explain unusual patterns.

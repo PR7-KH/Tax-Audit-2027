@@ -433,6 +433,10 @@ def build_adt_and_dashboard(wb, toi_ws, company_ws, log, link_all=False):
         t = toi_row.get(code.strip())
         if t is None:
             log.add("ADT", f"Code {code} (row {r}) not found in TOI")
+            for col in (5, 6):   # never leave a link pointing at another item's row
+                v = adt.cell(r, col).value
+                if isinstance(v, str) and v.startswith("=TOI!"):
+                    adt.cell(r, col).value = None
             continue
         for col, tcol in ((5, "C"), (6, "D")):
             want = f"=TOI!{tcol}{t}"
@@ -448,10 +452,9 @@ def build_adt_and_dashboard(wb, toi_ws, company_ws, log, link_all=False):
                 fixed += 1
                 log.add("ADT", f"{L(col)}{r} ({code}): hard-coded {cur:,} replaced by {want}")
             elif isinstance(cur, str) and cur.startswith("="):
-                mismatched += 1
-                log.add("ADT", f"{L(col)}{r} ({code}): formula {cur} pointed to a different TOI row, now {want}")
+                mismatched += 1   # template links are placeholders; the item code decides the TOI row
             adt.cell(r, col).value = want
-    log.add("ADT", f"{fixed} stale hard-coded numbers replaced by TOI links, {mismatched} mis-pointed links corrected")
+    log.add("ADT", f"{fixed} stale hard-coded numbers replaced by TOI links, {mismatched} links matched to the TOI by item code")
     if blank and not link_all:
         log.add("ADT", f"{blank} Current/Prior cells have no TOI link in V5.1 (current assets, liabilities and most income lines show blank). Run with --link-all to fill them.")
     if linked:

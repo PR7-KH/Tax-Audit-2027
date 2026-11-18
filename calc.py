@@ -1,6 +1,6 @@
 """Small Excel formula calculator so the Control Center can show reports without Excel.
 
-Supports what the engine writes: IF, AND, OR, SUM, N, TODAY, cell and range references
+Supports what the engine writes: IF, AND, OR, SUM, N, ABS, MAX, MIN, IFERROR, TODAY, cell and range references
 (including other sheets), + - * / & comparisons and percent. Empty cells behave like Excel:
 equal to both "" and 0, and a formula that returns an empty reference shows 0.
 """
@@ -259,6 +259,20 @@ class Calc:
         if name == "N":
             v = self.scalar(self.ev(args[0], sheet))
             return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0.0
+        if name in ("ABS", "MAX", "MIN"):
+            vals = []
+            for a in args:
+                v = self.ev(a, sheet)
+                for c in ([c for row in v for c in row] if isinstance(v, list) else [v]):
+                    if isinstance(c, str) and c.startswith("#"):
+                        raise XlError(c)
+                    if isinstance(c, (int, float)) and not isinstance(c, bool):
+                        vals.append(float(c))
+                    elif not isinstance(v, list) and name == "ABS":
+                        vals.append(self.num(c))
+            if name == "ABS":
+                return abs(vals[0]) if vals else 0.0
+            return (max if name == "MAX" else min)(vals) if vals else 0.0
         if name == "TODAY":
             return (date.today() - date(1899, 12, 30)).days
         if name == "IFERROR":
