@@ -50,6 +50,21 @@ def _tokens(name):
     return {t for t in re.findall(r"[A-Z0-9ក-៿]+", str(name or "").upper()) if t not in stop and len(t) > 1}
 
 
+def norm_inv(v):
+    return re.sub(r"[^0-9A-Z]", "", str(v or "").upper())
+
+
+def same_invoice(a, b):
+    """Invoice numbers match when equal, or when one ends with the other (INV-001 vs 001), at least 3 characters."""
+    a, b = norm_inv(a), norm_inv(b)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    short, long_ = sorted((a, b), key=len)
+    return len(short) >= 3 and long_.endswith(short) and not long_[-len(short) - 1:-len(short)].isdigit()
+
+
 def same_party(tin_a, name_a, tin_b, name_b):
     if tin_a and tin_b:
         return tin_a == tin_b
@@ -103,6 +118,8 @@ def map_wht(labels, first_col):
         "name": _pick(low, (r"ឈ្មោះ", r"name", r"payee", r"recipient"), limit=end),
         "nature": _pick(low, (r"ប្រភេទ", r"បរិយាយ", r"nature", r"type", r"description", r"income"), avoid=(r"អត្រា", r"rate"), limit=end),
         "rate": _pick(low, (r"អត្រា", r"rate", r"%"), limit=end),
+        "invoice": _pick(low, (r"វិក្កយបត្រ", r"invoice", r"\binv\b", r"លេខយោង", r"reference", r"\bref\b"),
+                         avoid=(r"កាលបរិច្ឆេទ", r"date"), limit=end),
         "resident": _pick(low, (r"និវាសនជន", r"resident"), limit=end),
         "base": first_col - 1,
         "tax": first_col,
@@ -221,7 +238,8 @@ def build(company_folder, tol=TOL):
     for ym, path, labels, rows in wht_files:
         c = map_wht(labels, whl.first_col)
         lab = lambda i: f"{aa.col_letter(i)}: {labels[i]}" if i is not None and i < len(labels) else "not found"
-        mapping.append(["WHT", M(ym), path.name, lab(c["tin"]), lab(c["name"]), lab(c["nature"]), lab(c["rate"]),
+        mapping.append(["WHT", M(ym), path.name, lab(c["tin"]), lab(c["name"]), lab(c["nature"]),
+                        lab(c["rate"]) + " · invoice " + lab(c["invoice"]),
                         lab(c["base"]), lab(c["tax"]), lab(c["resident"])])
         mtags.append("warning" if c["name"] is None else "even")
         for r in rows:
@@ -231,7 +249,8 @@ def build(company_folder, tol=TOL):
                 continue
             wht.append(dict(ym=ym, tin=_norm_tin(_cell(r, c["tin"])), tin_text=_text(_cell(r, c["tin"])),
                             name=_text(_cell(r, c["name"])), nature=_text(_cell(r, c["nature"])),
-                            rate=_text(_cell(r, c["rate"])), base=base, tax=tax, file=path.name, used=0.0, left=base))
+                            rate=_text(_cell(r, c["rate"])), invoice=_text(_cell(r, c["invoice"])),
+                            base=base, tax=tax, file=path.name, used=0.0, left=base))
 
     # ---- group WHT-type purchases by supplier and month, then match
     groups = defaultdict(list)
@@ -241,16 +260,22 @@ def build(company_folder, tol=TOL):
     # Each WHT line's base is used once: first by purchases of the same month, then (if the payment
     # was later) by the previous month's purchases that are still not covered.
     ordered = sorted(groups.items(), key=lambda x: (x[0][0], x[1][0]["name"].upper()))
-    alloc = {k: {"base": 0.0, "tax": 0.0, "when": set()} for k, _ in ordered}
+    alloc = {k: {"base": 0.0, "tax": 0.0, "when": set(), "by": set()} for k, _ in ordered}
 
-    def take(key, items, target, label):
+    def take(key, items, targets, label, by):
         first, need = items[0], sum(i["amount"] for i in items) - alloc[key]["base"]
+        invoices = [i["invoice"] for i in items if i["invoice"]]
         for w in wht:
             if need <= 0:
                 break
-            if w["ym"] != target or w["left"] <= 0 or not same_party(first["tin"], first["name"], w["tin"], w["name"]):
+            if w["ym"] not in targets or w["left"] <= 0:
                 continue
-            part = min(w["left"], need) if label else w["left"]   # same month: the whole line belongs here
+            if by == "invoice":
+                if not (w["invoice"] and any(same_invoice(inv, w["invoice"]) for inv in invoices)):
+                    continue
+            elif not same_party(first["tin"], first["name"], w["tin"], w["name"]):
+                continue
+            part = min(w["left"], need) if (label or by == "invoice") else w["left"]   # same month by name: whole line
             share = part / w["base"] if w["base"] else 1.0
             w["left"] -= part
             w["used"] += 1
@@ -258,10 +283,16 @@ def build(company_folder, tol=TOL):
             alloc[key]["base"] += part
             alloc[key]["tax"] += w["tax"] * share
             alloc[key]["when"].add(label)
-    for key, items in ordered:
-        take(key, items, key[0], "")
-    for key, items in ordered:
-        take(key, items, aa.next_month(key[0]), "next month")
+            alloc[key]["by"].add(by)
+    later = lambda ym, n: [ym] if n == 0 else later(aa.next_month(ym), n - 1) + [ym]
+    for key, items in ordered:          # 1. invoice number: one month before to three months after
+        ym = key[0]
+        take(key, items, {aa.prev_month(ym), *later(ym, 3)}, "", "invoice")
+    for key, items in ordered:          # 2. TIN / name, same month
+        take(key, items, {key[0]}, "", "name / TIN")
+    for key, items in ordered:          # 3. TIN / name, paid later (next one or two months)
+        n1 = aa.next_month(key[0])
+        take(key, items, {n1, aa.next_month(n1)}, "later month", "name / TIN")
 
     results = []
     for key, items in ordered:
@@ -272,7 +303,7 @@ def build(company_folder, tol=TOL):
         rate = max(RATES.get(n, 0.15) for n in natures)
         base, tax = alloc[key]["base"], alloc[key]["tax"]
         found = base > 0
-        when = "next month" if alloc[key]["when"] == {"next month"} else ""
+        when = ", ".join(sorted(alloc[key]["by"])) + (" · later month" if alloc[key]["when"] == {"later month"} else "")
         gap = max(0.0, amount - base)
         if not found:
             result = "Not declared"

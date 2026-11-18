@@ -282,3 +282,32 @@ class WhtAnalysisTest(unittest.TestCase):
         self.assertEqual([r["Payee"] for r in self.rows("WHT not in PR")], ["UNKNOWN PAYEE"])
         total = [r for r in self.rows("Summary") if r["Area"] == "Total estimated WHT at risk"][0]
         self.assertEqual(total["Amount (KHR)"], 400_000 + 12 * 120_000 + 300_000)
+
+
+class WhtInvoiceMatchTest(unittest.TestCase):
+    WHT_HEAD_INV = ["ល.រ", "កាលបរិច្ឆេទ", "លេខវិក្កយបត្រ", "លេខអត្តសញ្ញាណកម្ម", "ឈ្មោះអ្នកទទួល", "ប្រភេទប្រាក់ចំណូល", "អត្រា",
+                    "H", "I", "ទឹកប្រាក់ត្រូវបើក", "ប្រាក់ពន្ធកាត់ទុក"]
+
+    def test_invoice_matches_other_name_and_later_month(self):
+        import wht_analysis
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for m in (1, 2, 3):
+                for kind in ("PR", "WHT"):
+                    d = root / kind / "2025"; d.mkdir(parents=True, exist_ok=True)
+                    wb = Workbook(); ws = wb.active
+                    ws.append([kind]); ws.append(PR_HEAD if kind == "PR" else self.WHT_HEAD_INV); ws.append([None]); ws.append([None])
+                    if kind == "PR" and m == 1:
+                        ws.append([1, "2025-01-10", "INV-001", "បុគ្គលមិនជាប់អាករ", "", "MR. A", 3_000_000, 3_000_000, 0, 0, 0, 0, 0, 0, 0, "House rental"])
+                        ws.append([2, "2025-01-12", "INV-002", "បុគ្គលមិនជាប់អាករ", "", "MR. B", 1_000_000, 1_000_000, 0, 0, 0, 0, 0, 0, 0, "Repair service"])
+                    if kind == "WHT" and m == 3:      # rental declared in March, under another spelling of the name
+                        ws.append([1, "2025-03-25", "001", "", "LOK A (LANDLORD)", "Rental", "10%", None, None, 3_000_000, 300_000])
+                    wb.save(d / f"{kind}_{m:02d}_2025.xlsx")
+            an = wht_analysis.build(root)
+            ok = {r[1]: r for r in an.views["Declared OK"].rows}
+            self.assertIn("MR. A", ok)
+            self.assertIn("invoice", ok["MR. A"][14])
+            risk = [r[1] for r in an.views["WHT risk"].rows]
+            self.assertEqual(risk, ["MR. B"])                      # only the undeclared purchase is raised
+            self.assertTrue(wht_analysis.same_invoice("INV-001", "001"))
+            self.assertFalse(wht_analysis.same_invoice("1001", "001"))

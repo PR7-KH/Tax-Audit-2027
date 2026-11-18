@@ -324,3 +324,8 @@ Also: Key risk checks show the TOI codes; Cash flow shows the **indirect** and *
 is used for asset purchases, not shown as a view); TOS compares 12 months of salary with the GL salary
 accounts, TOI (B23 + C8) and bank payroll payments; WHT candidates must have supplier type
 **បុគ្គលមិនជាប់អាករ** and no TIN (L001-… / K00X-…).
+
+**WHT matching** (PR → WHT return), each WHT line used once: (1) invoice number (INV-001 = 001), from one
+month before to three months after the purchase; (2) TIN or name in the same month; (3) TIN or name in
+the next one or two months. Fully declared purchases go to "Declared OK" (no risk, not on the dashboard);
+only purchases not declared or partly declared are raised. The Result column says how it was matched.
