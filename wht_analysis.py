@@ -357,7 +357,11 @@ def build(company_folder, tol=TOL):
     except Exception as exc:
         an.add_note(f"GL months for late WHT: {str(exc).splitlines()[0]}")
     for x in results:
-        months_gl = [gl_month[rx.inv_key(i)] for i in x["inv_list"] if gl_month and rx.inv_key(i) in gl_month]
+        def months_before(m):     # how many months the GL month is before the PR month
+            gy, gm = int(m[:4]), int(m[5:7])
+            return (x["ym"][0] - gy) * 12 + x["ym"][1] - gm
+        months_gl = [gl_month[rx.inv_key(i)] for i in x["inv_list"] if gl_month and rx.inv_key(i) in gl_month
+                     and 0 <= months_before(gl_month[rx.inv_key(i)]) <= 3]     # same number in another year is another invoice
         x["gl_month"] = min(months_gl) if months_gl else ""
         if x["gl_month"] and x["gl_month"] < aa.month_key(x["ym"]):
             if x["result"].startswith("Declared"):
