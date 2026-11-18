@@ -209,13 +209,13 @@ WHT_HEAD = ["ល.រ", "កាលបរិច្ឆេទ", "លេខអត្�
 
 def make_pr_wht(root):
     for m in range(1, 13):
-        lines = [("Individual", "", "SOK LANDLORD", 4_000_000, 0, 0, 0, "Office rental"),
-                 ("Individual", "", "CHEA CLEANING", 800_000, 0, 0, 0, "Cleaning service"),
-                 ("VAT", "K001-123", "ABC SUPPLY CO., LTD", 11_000_000, 0, 10_000_000, 1_000_000, "Raw material"),
-                 ("Individual", "", "MARKET SELLER", 500_000, 0, 0, 0, "Goods: fabric"),
+        lines = [("បុគ្គលមិនជាប់អាករ", "", "SOK LANDLORD", 4_000_000, 0, 0, 0, "Office rental"),
+                 ("បុគ្គលមិនជាប់អាករ", "", "CHEA CLEANING", 800_000, 0, 0, 0, "Cleaning service"),
+                 ("អ្នកជាប់អាករ", "K001-100123456", "ABC SUPPLY CO., LTD", 11_000_000, 0, 10_000_000, 1_000_000, "Raw material"),
+                 ("បុគ្គលមិនជាប់អាករ", "", "MARKET SELLER", 500_000, 0, 0, 0, "Goods: fabric"),
                  ("Overseas", "", "CHINA MACHINE", 20_000_000, 20_000_000, 0, 0, "Import machine")]
         if m == 4:
-            lines.append(("Individual", "", "DARA", 2_000_000, 0, 0, 0, ""))
+            lines.append(("បុគ្គលមិនជាប់អាករ", "", "DARA", 2_000_000, 0, 0, 0, ""))
         for kind in ("PR", "WHT"):
             d = root / kind / "2025"
             d.mkdir(parents=True, exist_ok=True)
@@ -253,10 +253,16 @@ class WhtAnalysisTest(unittest.TestCase):
         nature = {r["Supplier"]: r["Nature"] for r in self.rows("PR lines classified")}
         self.assertEqual(nature["SOK LANDLORD"], "Rental")
         self.assertEqual(nature["CHEA CLEANING"], "Service / fee")
-        self.assertEqual(nature["ABC SUPPLY CO., LTD"], "Excluded: VAT invoice")
+        self.assertEqual(nature["ABC SUPPLY CO., LTD"], "Excluded: registered taxpayer (has TIN)")
         self.assertEqual(nature["MARKET SELLER"], "Excluded: goods / material")
         self.assertEqual(nature["CHINA MACHINE"], "Excluded: import")
         self.assertEqual(nature["DARA"], "Unclear")
+
+    def test_both_criteria_required(self):
+        import wht_analysis as w
+        self.assertEqual(w.classify("Office rental", "SOK", "បុគ្គលមិនជាប់អាករ", 0, False, "")[0], "Rental")
+        self.assertTrue(w.classify("Office rental", "SOK", "បុគ្គលមិនជាប់អាករ", 0, False, "L001-100163327")[0].startswith("Excluded"))
+        self.assertTrue(w.classify("Office rental", "SOK", "អ្នកជាប់អាករ", 0, False, "")[0].startswith("Excluded: supplier type"))
 
     def test_declared_months_are_ok_and_only_gaps_are_raised(self):
         ok = {(r["Month"], r["Supplier"]) for r in self.rows("Declared OK")}

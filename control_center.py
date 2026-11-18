@@ -34,32 +34,34 @@ NUMBER = re.compile(r"^-?[\d,]+(\.\d+)?%?$")
 
 # (kind, key, label)   kind: group | item | sub
 MENU = [
-    ("group", "", "TAX AUDIT"),
+    ("group", "", "OVERVIEW"),
     ("item", "dashboard", "Audit Dashboard"),
+    ("group", "", "TAX RETURNS"),
     ("item", "tois", "TOIs Overview"),
     ("item", "mtr", "MTR Overview"),
     ("item", "consolidate", "Consolidated data"),
-    ("item", "tps", "Tax Paid Summary"),
+    ("item", "an_TAXPAID", "Tax Payment History"),
+    ("group", "", "TOI & FINANCIALS"),
     ("item", "an_RATIO", "Ratio analysis (TOI)"),
     ("item", "an_CASHFLOW", "Cash flow (TOI)"),
-    ("item", "audit_tools", "Tax Audit Tools"),
-    ("group", "", "FINANCIAL AUDIT"),
+    ("item", "an_AUDITREP", "Audit report vs TOI"),
+    ("group", "", "TAX RISK TESTS"),
+    ("item", "tax_risk", "Tax risk finding"),
+    ("item", "an_REVENUE", "Revenue"),
+    ("item", "an_EXPENSE", "Expense"),
+    ("item", "an_TOS", "TOS (salary tax)"),
+    ("item", "an_WHT", "WHT (withholding tax)"),
+    ("item", "an_ARAP", "A/R & A/P"),
+    ("group", "", "ACCOUNTING RECORDS"),
     ("item", "fin_SALES", "Sales"),
     ("item", "fin_GL", "General ledger"),
     ("item", "fin_BANK", "Bank"),
     ("item", "fin_TB", "Trial balance"),
     ("item", "fin_AR", "A/R"),
     ("item", "fin_AP", "A/P"),
-    ("item", "fin_EXPENSE", "Expense"),
-    ("item", "tax_risk", "Tax risk finding"),
-    ("group", "", "AUDIT ANALYSIS"),
-    ("item", "an_AUDITREP", "Audit report vs TOI"),
-    ("item", "an_ARAP", "A/R & A/P"),
-    ("item", "an_REVENUE", "Revenue"),
-    ("item", "an_EXPENSE", "Expense"),
-    ("item", "an_TOS", "TOS (salary tax)"),
-    ("item", "an_WHT", "WHT (withholding tax)"),
-    ("group", "", "SYSTEM"),
+    ("item", "fin_EXPENSE", "Expense records"),
+    ("group", "", "TOOLS"),
+    ("item", "audit_tools", "Tax Audit Tools"),
     ("item", "log", "Processing log"),
 ]
 ACTION_TITLES = {"sources": "Source inspect", "build_all": "Build all data"}
@@ -74,7 +76,7 @@ SUBTITLE = {
     "mtr_pr": "PR file list with year subtotals.", "mtr_sr": "SR file list with year subtotals.",
     "mtr_tos": "TOS file list with year subtotals.", "mtr_wht": "WHT file list with year subtotals.",
     "tps": "Tax paid by item for the two years, from the Info folder.",
-    "dashboard": "Audit rules from the ADT sheet applied to TOI. Check the Processing log for corrected V5.1 numbers.",
+    "dashboard": "One risk summary: every flagged item from the TOI rules (ADT), ratios, cash flow, audit report, revenue, expense, TOS, WHT, tax payments and A/R & A/P.",
     "fin_SALES": "Sales listing rows. Find, filter by month, click a heading to sort; Export saves the filtered rows.",
     "fin_GL": "General ledger lines. Find in any column (for example Account Name = sales), filter by month, sort, export.",
     "fin_BANK": "All bank statements in one aligned list, with a Type column that classifies each credit.",
@@ -83,6 +85,7 @@ SUBTITLE = {
     "an_REVENUE": "Sales per SR monthly returns, sales listing, GL, TB and TOI: year, month, invoice and buyer comparisons.",
     "an_EXPENSE": "Purchases per PR returns vs GL accounts payable, GL expense 5xxxx / 6xxxx vs TOI and TB, and TOS salary vs GL salary.",
     "an_AUDITREP": "Audited financial statements (PDF or Word) read and compared with the TOI: balance sheet, income statement, cash flow, opinion and notes.",
+    "an_TAXPAID": "Tax paid per the GDT Payment History (Tax Paid folder PDF / Excel, or Info Sheet2 / Sheet3): monthly detail, year summary, paid vs declared.",
     "an_ARAP": "A/R and A/P listings vs TOI (A18, A46), GL and audited accounts, with aging and per customer / supplier detail.",
     "fin_AP": "A/P listing rows. Click a heading to filter or sort; Export saves the filtered rows.",
     "an_RATIO": "Profitability, liquidity, solvency and efficiency ratios from the TOI (N vs N-1), with key risk checks.",
@@ -98,6 +101,7 @@ ANALYSIS_BUILDERS = {
     "an_RATIO": ("toi_analysis", "build_ratios"),
     "an_AUDITREP": ("audit_report", "build"),
     "an_ARAP": ("ar_ap", "build"),
+    "an_TAXPAID": ("tax_paid", "build"),
     "an_CASHFLOW": ("toi_analysis", "build_cashflow"),
 }
 EXPORT_NAME = {"mtr": "MTR_Overview"}
@@ -826,6 +830,34 @@ class App(tk.Tk):
         analysis = getattr(importlib.import_module(module), fn)(folder)
         return ("analysis", folder, key, analysis)
 
+    def job_dashboard(self, prebuilt=None, risk_report=None):
+        """Build what the dashboard needs that is not built yet (no Tk calls: runs in the background)."""
+        import importlib
+        import risk_dashboard
+        folder = str(Path(self.job_settings[0]))
+        have = {k: a for (f, k), a in list(self.__dict__.get("analyses", {}).items()) if f == folder}
+        have.update(prebuilt or {})
+        for key, (module, fn) in ANALYSIS_BUILDERS.items():
+            if key not in have:
+                try:
+                    have[key] = getattr(importlib.import_module(module), fn)(folder)
+                except Exception:
+                    pass
+        report = risk_report if risk_report is not None else self.risk_reports.get(folder)
+        if report is None:
+            try:
+                import risk_view
+                report = risk_view.build_report(folder)
+            except Exception:
+                report = None
+        wb = cal = None
+        try:
+            _k, wb, _log, cal = self.ensure_built()
+        except Exception:
+            pass
+        dash = risk_dashboard.build(folder, have, report, wb, cal)
+        return ("dashboard_built", folder, have, report, dash)
+
     def show_analysis(self, key, view=None):
         if self.busy:
             return
@@ -1293,7 +1325,7 @@ class App(tk.Tk):
             return
         if self.audit_panel is not None:self.audit_panel.pack_forget()
         if not self.preview_card.winfo_manager():self.preview_card.pack(fill="both",expand=True,before=self.status_lbl,pady=3)
-        label = ACTION_TITLES.get(key) or next(m[2] for m in MENU if m[1] == key)
+        label = ACTION_TITLES.get(key) or next((m[2] for m in MENU if m[1] == key), "Tax Paid Summary" if key == "tps" else key)
         self.mark_active(key)
         self.title_lbl.config(text=label.strip())
         self.sub_lbl.config(text=SUBTITLE.get(key, ""))
@@ -1313,8 +1345,6 @@ class App(tk.Tk):
         self.tax_options.pack_forget()
         self.toi_pdf_options.pack_forget()
         self.dashboard_options.pack_forget()
-        if key == "dashboard":
-            self.dashboard_options.pack(side="left", padx=6)
         if key == "tps":
             self.tax_options.pack(fill="x", before=self.picker, pady=4)
         self.btn_export.set_enabled(key in engine.SECTIONS or key == "tax_risk")
@@ -1339,6 +1369,12 @@ class App(tk.Tk):
                 self.q.put(self.risk_cache[folder])
             else:
                 self.run_bg(self.job_tax_risk)
+            return
+        if key == "dashboard":
+            if (folder, key) in self.analyses:
+                self.show_analysis(key)
+            else:
+                self.run_bg(self.job_dashboard)
             return
         if key.startswith("an_"):
             if (folder, key) in self.analyses:
@@ -1618,6 +1654,13 @@ class App(tk.Tk):
                              + (" · " + analysis.notes[0] if analysis.notes else "")])
             except Exception as exc:
                 rows.append([mark.BAD, f"Analysis: {label}", "Not built: " + (str(exc).splitlines()[0] if str(exc) else type(exc).__name__)])
+        try:
+            report = self.risk_reports.get(str(Path(folder)))
+            _kind, dfolder, _have, _r, dash = self.job_dashboard({k: a for _f, k, a in analyses}, report)
+            analyses.append((dfolder, "dashboard", dash))
+            rows.insert(0, [mark.READY, "Audit Dashboard", dash.headline().replace("high-risk", "High")])
+        except Exception as exc:
+            rows.insert(0, [mark.BAD, "Audit Dashboard", "Not built: " + (str(exc).splitlines()[0] if str(exc) else type(exc).__name__)])
         return ("built_all", res, pages, risk, rows, analyses)
 
     # ------------------------------------------------------------ queue results -> screen
@@ -1684,6 +1727,17 @@ class App(tk.Tk):
                               tags=[source_check.TAG.get(r[0], "even") for r in rows])
                     self.status("Build all data finished. Every menu on the left now opens without waiting.")
                     self.notify_build_done()
+                elif kind == "dashboard_built":
+                    _k, folder, have, report, dash = msg
+                    for akey, analysis in have.items():
+                        self.analyses[(folder, akey)] = analysis
+                    if report is not None:
+                        self.risk_reports[folder] = report
+                    self.analyses[(folder, "dashboard")] = dash
+                    if (self.current or {}).get("key") == "dashboard" and folder == str(Path(self.folder.get())):
+                        self.show_analysis("dashboard")
+                        self.status(dash.headline().replace("high-risk", "High") + ". Export this report saves the risk summary to Excel."
+                                    + (" Notes: " + "; ".join(dash.notes[:2]) if dash.notes else ""))
                 elif kind == "analysis":
                     _k, folder, key, analysis = msg
                     self.analyses[(folder, key)] = analysis
@@ -1750,7 +1804,7 @@ class App(tk.Tk):
         self.run_bg(job)
 
     def export_this(self):
-        if str((self.current or {}).get("key") or "").startswith("an_"):
+        if str((self.current or {}).get("key") or "").startswith("an_") or (self.current or {}).get("key") == "dashboard":
             self.export_analysis()
             return
         if (self.current or {}).get("data"):

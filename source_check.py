@@ -320,6 +320,25 @@ def inspect(company_folder, import_results=None):
         else:
             frow(BAD, "Audit Report", "All", ar_files, "No readable PDF / Word report" if ar_files else "Folder has no PDF or Word file", ar_dir)
 
+    # ---- tax payment history (optional): GDT Payment History PDF / Excel, else Info Sheet2 / Sheet3
+    try:
+        import tax_paid
+        tp_rows, tp_dir, _tp_notes = tax_paid.collect(root)
+    except Exception:
+        tp_rows, tp_dir = [], None
+    years = sorted({r[0] for r in tp_rows})
+    if tp_dir is None:
+        frow(NOTE if not years else READY, "Tax Paid", "All", [],
+             (f"Uses Info Sheet2 / Sheet3: {', '.join(map(str, years))}" if years else
+              "Not provided (optional): add a 'Tax Paid' folder with the GDT Payment History (PDF or Excel)"), root)
+    else:
+        files = [p for p in visible_files(tp_dir)]
+        for p in files:
+            filerow(READY if p.suffix.lower() in (".pdf", ".xlsx", ".xlsm") else NOTE, "Tax Paid", "All", p,
+                    "Payment History" if p.suffix.lower() in (".pdf", ".xlsx", ".xlsm") else "Not used: PDF or Excel only")
+        frow(READY if years else BAD, "Tax Paid", "All", files,
+             f"Years {', '.join(map(str, years))}" if years else "No Payment History table found in the files", tp_dir)
+
     # ---- financial folders
     for key, (label, _names) in engine.FINANCE_FOLDERS.items():
         directory = engine.finance_folder(root, key)

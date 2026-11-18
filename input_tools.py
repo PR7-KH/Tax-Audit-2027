@@ -25,6 +25,7 @@ def target_folders(folder):
     aliases = {name: name for name in engine.cons.LAYOUTS}
     aliases.update({'TOI': 'TOI', 'INFO': 'Info'})
     aliases.update({name: 'Audit Report' for name in engine.AUDIT_REPORT_NAMES})
+    aliases.update({name: 'Tax Paid' for name in engine.TAX_PAID_NAMES})
     for label, names in engine.FINANCE_FOLDERS.values():
         aliases.update({name: label for name in names})
     return [(aliases[d.name.upper()], d, d.name.upper() in engine.cons.LAYOUTS)
@@ -324,6 +325,7 @@ def classify_download(path):
         'GL': r'\b(gl|general ledger)\b', 'TB': r'\b(tb|trial balance)\b',
         'BANK': r'\b(bank|bank statement)\b', 'AR': r'\b(ar|receivables?|a r)\b', 'AP': r'\b(ap|payables?|a p)\b',
         'Audit Report': r'\b(audit report|audited|auditor s report|financial statements?|afs)\b',
+        'Tax Paid': r'\b(tax paid|payment history|tax payments?|paid tax)\b',
         'EXPENSE': r'\b(expenses?|purchase ledger)\b', 'TOI':r'\btoi(?:\d[a-z0-9]*|x[a-z0-9]*)?\b', 'Info':r'\b(company info|info)\b',
     }
     found=[name for name,pattern in patterns.items() if re.search(pattern,text)]

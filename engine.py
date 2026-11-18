@@ -481,6 +481,25 @@ def build_adt_and_dashboard(wb, toi_ws, company_ws, log, link_all=False):
     for k, d in tpl.column_dimensions.items():
         dash.column_dimensions[k].width = d.width
     dash.column_dimensions["B"].width = max(dash.column_dimensions["B"].width or 0, 18)
+    # Show only the items that need checking; ADT keeps every line.
+    try:
+        import calc as _calc
+        cal = _calc.Calc(wb)
+        shown = hidden = 0
+        for r in range(1, adt.max_row + 1):
+            code = adt.cell(r, 4).value
+            if not (isinstance(code, str) and re.fullmatch(r"([ABCD]\d{1,2}|KEY\d+)", code.strip())):
+                continue
+            if cal.value("ADT", r, 10) == "Check":
+                shown += 1
+            else:
+                dash.row_dimensions[r + ADT_OFFSET].hidden = True
+                hidden += 1
+        dash["A9"] = f"Showing the {shown} items flagged Check ({hidden} other lines hidden). The ADT sheet has every line."
+        dash["A9"].font = Font(name=FONT, italic=True, color="61748B")
+        log.add("Audit Dashboard", f"{shown} items flagged Check shown, {hidden} lines hidden (see ADT for all)")
+    except Exception as exc:
+        log.add("Audit Dashboard", f"Could not evaluate flags, all lines shown: {exc}")
     return dash
 
 
@@ -495,6 +514,8 @@ FINANCE_FOLDERS = {
     "EXPENSE": ("Expense", {"EXPENSE", "EXPENSES", "PURCHASE LEDGER"}),
 }
 FINANCE_NAMES = set().union(*(v[1] for v in FINANCE_FOLDERS.values()))
+TAX_PAID_NAMES = {"TAX PAID", "TAX PAYMENT", "TAX PAYMENTS", "PAYMENT HISTORY", "TAX PAID HISTORY", "TAXPAID", "TAX_PAID",
+                  "TAX PAYMENT HISTORY", "TAX-PAID"}
 AUDIT_REPORT_NAMES = {"AUDIT REPORT", "AUDIT_REPORT", "AUDIT-REPORT", "AUDITREPORT", "AUDIT REPORTS", "AUDITED FS",
                       "AUDITED FINANCIAL STATEMENTS", "FINANCIAL STATEMENTS", "AFS"}
 FIN_EXT = {".xlsx", ".xlsm", ".xls", ".csv", ".pdf"}
@@ -652,7 +673,7 @@ def build_workbook(company_folder, months_prior=3, link_all=False):
     tmp = tdir / "consolidated.xlsx"
     original_hidden = cons.hidden
     # Finance folders (GL, Bank, ...) are not tax data: keep them out of the tax consolidation.
-    cons.hidden = lambda p: original_hidden(p) or (p.parent == root and p.name.upper() in (FINANCE_NAMES | AUDIT_REPORT_NAMES | {"AUDIT_TOOLS","TOI_PDFS"}))
+    cons.hidden = lambda p: original_hidden(p) or (p.parent == root and p.name.upper() in (FINANCE_NAMES | AUDIT_REPORT_NAMES | TAX_PAID_NAMES | {"AUDIT_TOOLS","TOI_PDFS"}))
     try:
         with open(tdir / "consolidated.log", "w", encoding="utf-8") as lf:
             cons.consolidate(root, tmp, lf, excel_job=True)

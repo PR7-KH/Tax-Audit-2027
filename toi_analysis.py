@@ -156,12 +156,33 @@ def div(a, b):
 
 
 # ------------------------------------------------------------------ key risk checks
+KEY_CODES = [  # check name (start) -> TOI codes it uses
+    ("Profit made but cash decreased", "B48 vs A21+A22"), ("Profit made, A/R and cash", "B48, A18, A21+A22"),
+    ("Debt greater than assets", "A37+A42 vs A0"), ("Negative equity", "A29"), ("Gross profit negative", "B7 = B0−(B4+B5+B6)"),
+    ("Operating expenses greater than cost", "B22 vs B4+B5+B6"), ("Operating expenses greater than revenue", "B22 vs B0"),
+    ("No cost of sales", "B4+B5+B6, A14..A16"), ("Loss in both years", "B46 N and N-1"), ("Loss but cash increased", "B46, A21+A22"),
+    ("Related-party funding", "A38+A45"), ("Stock up while revenue down", "A14..A17 vs B0"), ("A/R growing faster", "A18 vs B0"),
+    ("Fixed assets bought", "A1 + B36+C9+C12 (step 10)"), ("Balance sheet does not balance", "A0 vs A28"),
+    ("Profit in balance sheet", "A36 vs B48"), ("Income tax below 1 %", "B47 vs 1% × B0"),
+]
+
+
+def key_codes(name):
+    m = re.search(r"\(([ABCD]\d+)\)", name)
+    if m:
+        return m.group(1)
+    m = re.match(r"(Opening|Closing) stock (\w+) vs .*?(A\d+)", name)
+    if m:
+        return f"{m.group(2)} vs {m.group(3)}"
+    return next((c for start, c in KEY_CODES if name.startswith(start)), "")
+
+
 def key_checks(t):
-    """[(check, current, prior, flag, finding (EN), suggested procedure)] for the dashboard-style view."""
+    """[(check, TOI codes, current, prior, flag, finding (EN), suggested procedure)] for the dashboard-style view."""
     out = []
 
     def add(name, cur, pri, hit, finding, action):
-        out.append([name, cur, pri, "Check" if hit else "OK", finding if hit else "", action if hit else ""])
+        out.append([name, key_codes(name), cur, pri, "Check" if hit else "OK", finding if hit else "", action if hit else ""])
 
     profit_c, profit_p = t.c("B48"), t.p("B48")
     add("Profit made but cash decreased", t.d("A21", "A22"), profit_c,
@@ -396,6 +417,47 @@ def cashflow_lines(t, step10=None):
     return L, dict(op=op, inv=inv_total, fin=fin_total, net=net, diff=diff, dep=dep, derived_capex=derived)
 
 
+def direct_lines(t, lines, tot):
+    """Direct-method operating section (cash received / paid), then the same investing and financing
+    sections as the indirect method. A balancing line keeps operating cash equal to the indirect method."""
+    d = t.d
+    L = []
+
+    def line(codes, label, amount, note=""):
+        L.append(["A. Operating activities (direct)", codes, label, amount, note, 1])
+    line("B0 − ΔA18 + ΔA47", "Cash received from customers", t.c("B0") - d("A18") + d("A47"), "Revenue less increase in receivables")
+    other_in = t.c("B8", "B12") - t.c("B16", "B20")
+    if other_in:
+        line("B8+B12 − B16 − B20", "Other income received (rental, interest, other)", other_in, "Gains on assets and unrealised FX excluded")
+    line("(B4+B5+B6 − C8 − C9 − C12) + Δstock − ΔA45 − ΔA46", "Cash paid to suppliers",
+         -(t.c("B4", "B5", "B6") - t.c("C8", "C9", "C12") + d("A14", "A15", "A16", "A17") - d("A45", "A46")),
+         "Cost of sales less non-cash and payroll parts, adjusted for stock and payables")
+    line("B23 + C8", "Cash paid to employees", -t.c("B23", "C8"), "Salaries in expenses and in production cost")
+    line("B22 − B23 − B36 − B38 − B40 + ΔA20 − ΔA48 − Δprovisions", "Cash paid for operating expenses",
+         -(t.c("B22") - t.c("B23", "B36", "B38", "B40")) - d("A20") + d("A48") + d("A40", "A49"),
+         "Expenses less salaries, depreciation, loss on assets and unrealised FX")
+    if t.c("B43", "B44", "B45"):
+        line("B43+B44+B45", "Interest paid", -t.c("B43", "B44", "B45"))
+    line("B47 − ΔA50 − ΔA51 + ΔA23..A25", "Taxes paid (income tax and other tax balances)",
+         -t.c("B47") + d("A50", "A51") - d("A23", "A24", "A25"))
+    other = tot["op"] - sum(x[3] for x in L)
+    if abs(other) > 0.5:
+        line("A19, A26, A27, A52 …", "Other operating items (other receivables, other assets, FX)", other,
+             "Balancing line so that both methods give the same operating cash")
+    L.append(["A. Operating activities (direct)", "", "Net cash from operating activities", tot["op"], "Same as the indirect method", 0])
+    L.extend(l for l in lines if not l[0].startswith("A. "))
+    return L
+
+
+def _cash_rows(lines):
+    rows, tags = [], []
+    for section, codes, label, amount, note, level in lines:
+        rows.append([section, codes, ("    " if level else "") + label, amount, note])
+        tags.append("section" if level == 0 and not label.startswith("Difference") else
+                    ("error" if label.startswith("Difference") and abs(amount) > TOL else "total" if label.startswith("Difference") else "even"))
+    return rows, tags
+
+
 # ------------------------------------------------------------------ analyses
 def _not_ready(an, msg):
     an.add_note(msg)
@@ -423,14 +485,14 @@ def build_ratios(company_folder):
                     None if chg is None else show(chg, kind), unit[kind], flag or ("OK" if cur is not None else "n/a"), formula, comment])
         tags.append("error" if flag else "even" if cur is None else "total")
     checks = key_checks(t)
-    flagged = [c for c in checks if c[3] == "Check"]
+    flagged = [c for c in checks if c[4] == "Check"]
     S = [["TOI file", path.name, None, None, "", "section"],
          ["Ratios flagged", f"{sum(1 for r in rows if r[7]):,} of {len(rows)} ratios outside the normal range", sum(1 for r in rows if r[7]), None,
           "See 'Ratios'.", "error" if any(r[7] for r in rows) else "total"],
          ["Key risk checks", f"{len(flagged):,} of {len(checks)} checks need attention", len(flagged), None, "See 'Key risk checks'.",
           "error" if flagged else "total"]]
     for c in flagged[:12]:
-        S.append(["   " + c[0], c[4], None, c[1], c[5], "warning"])
+        S.append([f"   {c[0]} [{c[1]}]", c[5], None, c[2], c[6], "warning"])
     S.append(["Revenue (B0)", "Current year", None, t.c("B0"), f"Prior year {t.p('B0'):,.0f}", "even"])
     S.append(["Profit after tax (B48)", "Current year", None, t.c("B48"), f"Prior year {t.p('B48'):,.0f}", "even"])
     S.append(["Total assets (A0) / liabilities", "Current year", None, t.c("A0"), f"Liabilities {liabilities(t, t.c):,.0f}", "even"])
@@ -438,8 +500,8 @@ def build_ratios(company_folder):
             money=[3], total=False, desc="Main ratios and risk checks from the TOI (current year N vs prior year N-1).")
     an.view("Ratios", ["Group", "Ratio", "N", "N-1", "Change", "Unit", "Flag", "Formula (TOI codes)", "Meaning"], out, tags,
             money=[], total=False, desc="Percent ratios are shown as %, others as times or days.")
-    an.view("Key risk checks", ["Check", "Current / value", "Compared with", "Flag", "Finding", "Suggested procedure"], checks,
-            ["error" if c[3] == "Check" else "total" for c in checks], money=[1, 2], total=False,
+    an.view("Key risk checks", ["Check", "TOI codes", "Current / value", "Compared with", "Flag", "Finding", "Suggested procedure"], checks,
+            ["error" if c[4] == "Check" else "total" for c in checks], money=[2, 3], total=False,
             desc="Cross-checks between TOI lines (same checks as the Audit Dashboard key-risk section).")
     an.view("TOI items", ["Code", "Description", "N", "N-1", "Change", "Change %"],
             [[k, v["desc"], v["cur"], v["pri"], v["cur"] - v["pri"], round((v["cur"] - v["pri"]) / v["pri"] * 100, 1) if v["pri"] else None]
@@ -462,13 +524,13 @@ def build_cashflow(company_folder):
         step10 = None
         an.add_note(f"Step 10: {str(exc).splitlines()[0]}")
     lines, tot = cashflow_lines(t, step10)
-    rows, tags = [], []
-    for section, codes, label, amount, note, level in lines:
-        rows.append([section, codes, ("    " if level else "") + label, amount, note])
-        tags.append("section" if level == 0 and not label.startswith("Difference") else
-                    ("error" if label.startswith("Difference") and abs(amount) > TOL else "total" if label.startswith("Difference") else "even"))
-    an.view("Cash flow", ["Section", "TOI codes", "Line", "Amount (KHR)", "Note"], rows, tags, money=[3], total=False,
-            desc="Indirect method from the two balance sheets in the TOI and the income statement of year N.")
+    cols = ["Section", "TOI codes", "Line", "Amount (KHR)", "Note"]
+    rows, tags = _cash_rows(lines)
+    an.view("Indirect method", cols, rows, tags, money=[3], total=False,
+            desc="Profit adjusted for non-cash items and working capital; asset purchases use TOI step 10 when it can be read.")
+    rows, tags = _cash_rows(direct_lines(t, lines, tot))
+    an.view("Direct method", cols, rows, tags, money=[3], total=False,
+            desc="Cash received and paid, worked out from the TOI income statement, cost tables and balance-sheet changes.")
     ins = []
     def add(text, hit, action):
         if hit:
@@ -488,11 +550,7 @@ def build_cashflow(company_folder):
     an.view("Findings", ["Finding", "Suggested procedure"], ins, ["warning" if a else "total" for _, a in ins], total=False,
             desc="What the cash flow shows.")
     if step10 and step10.get("found"):
-        an.view("Step 10 assets", ["Asset / line", "Additions (bought)", "Disposals"],
-                [list(r) for r in step10["rows"]] + ([["TOTAL row: " + step10["total_row"][0], step10["total_row"][1], step10["total_row"][2]]]
-                                                     if step10.get("total_row") else []),
-                None, money=[1, 2], total=False,
-                desc=f"Read from step 10. Additions column {step10['add_col']}; disposals column {step10['disp_col'] or 'not found'}.")
+        an.add_note(f"Asset purchases taken from TOI step 10 ({step10['add_col']}): {step10['additions']:,.0f}.")
     else:
         an.add_note("Step 10: purchase column not recognised (looked for ទិញ / បន្ថែម / កើន / addition / acquisition); "
                     "purchases were derived from the change in long-term assets plus depreciation.")

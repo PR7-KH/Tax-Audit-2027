@@ -171,6 +171,86 @@ def analyse(files, threshold=THRESHOLD, fx=FX):
                 no_file=no_file, first=first, last=last, threshold=threshold, fx=fx, foreign=foreign)
 
 
+PAYROLL_WORDS = re.compile(r"salar|payroll|wage|bonus|ប្រាក់ខែ|ប្រាក់បៀវត្ស|ប្រាក់ឈ្នួល", re.I)
+
+
+def salary_compare(root, decl, fx=FX, tol=0.05):
+    """Salary per TOS (12 months) vs GL salary accounts, TOI (B23 + C8) and bank payroll payments.
+    Returns (year, monthly rows, tags, summary lines, notes)."""
+    import finance_view as fv
+    notes = []
+    years = defaultdict(set)
+    for ym, *_ in decl:
+        years[ym[0]].add(ym[1])
+    if not years:
+        return None
+    year = max(years, key=lambda y: (len(years[y]), y))
+    tos_m, tax_m = defaultdict(float), defaultdict(float)
+    for ym, _k, rec, _f in decl:
+        if ym[0] == year:
+            tos_m[ym[1]] += rec["salary"] + rec["fb"]
+            tax_m[ym[1]] += rec["tax"] + rec["fb_tax"]
+    gl_m = None
+    gl_dir = aa.subfolder(root, {"GL", "GENERAL LEDGER", "LEDGER"})
+    gl_files = [p for p in fv.table_files(gl_dir) if p.suffix.lower() == ".xlsx"] if gl_dir else []
+    if gl_files:
+        try:
+            import sales_reconciliation as sr
+            gl_m = defaultdict(float)
+            accts = set()
+            for r in sr.read_gl(gl_files[0], year):
+                if r["code"][:1] in ("5", "6") and PAYROLL_WORDS.search(r["acct"]):
+                    gl_m[r["date"].month] += r["debit"] - r["credit"]
+                    accts.add(f"{r['code']} {r['acct']}")
+            notes.append("GL salary accounts: " + (", ".join(sorted(accts)) or "none found (account names with salary / wage / payroll)"))
+        except Exception as exc:
+            notes.append(f"GL: {str(exc).splitlines()[0]}")
+            gl_m = None
+    bank_m = None
+    bank_dir = aa.subfolder(root, {"BANK", "BANKS", "BANK STATEMENT", "BANK STATEMENTS"})
+    if bank_dir and fv.table_files(bank_dir):
+        try:
+            t = fv.load_table(fv.table_files(bank_dir), kind="BANK")
+            col = {c: i for i, c in enumerate(t.columns)}
+            if "Money Out" in col and "Description" in col and t.date_col is not None:
+                bank_m = defaultdict(float)
+                for r in t.rows:
+                    mk = fv.month_key(r[t.date_col])
+                    out = r[col["Money Out"]]
+                    if not mk or int(mk[:4]) != year or not isinstance(out, (int, float)) or not out:
+                        continue
+                    if PAYROLL_WORDS.search(str(r[col["Description"]] or "")):
+                        cur = str(r[col["Currency"]] or "") if "Currency" in col else ""
+                        bank_m[int(mk[5:])] += out * (fx if cur.upper() == "USD" else 1)
+            else:
+                notes.append("Bank: no Date / Description / Money Out columns")
+        except Exception as exc:
+            notes.append(f"Bank: {str(exc).splitlines()[0]}")
+    toi_salary = None
+    try:
+        import toi_analysis as ta
+        t, path, _err = ta.load(root)
+        if t is not None and (ta.year_of(path) in (None, year)):
+            toi_salary = t.c("B23", "C8")
+    except Exception:
+        pass
+    rows, tags = [], []
+    for m in range(1, 13):
+        a = tos_m.get(m, 0.0)
+        g = gl_m.get(m, 0.0) if gl_m is not None else None
+        b = bank_m.get(m, 0.0) if bank_m is not None else None
+        diffs = [x for x in (g, b) if x is not None]
+        st = "Not provided" if not diffs else ("Agrees" if all(abs(a - x) <= max(1000, tol * max(a, x)) for x in diffs) else "Differs")
+        rows.append([f"{year}-{m:02d}", a, tax_m.get(m, 0.0), g, b, None if g is None else a - g, None if b is None else a - b, st])
+        tags.append({"Agrees": "total", "Differs": "error"}.get(st, "warning"))
+    tos_total = sum(tos_m.values())
+    lines = [("TOS returns (12 months, salary + fringe benefits)", tos_total)]
+    lines.append(("General ledger salary / wage accounts", sum(gl_m.values()) if gl_m is not None else None))
+    lines.append(("TOI salary (B23 + production salary C8)", toi_salary))
+    lines.append(("Bank payroll payments (description: salary / payroll / wage)", sum(bank_m.values()) if bank_m is not None else None))
+    return year, rows, tags, lines, notes
+
+
 def build(company_folder, threshold=THRESHOLD, fx=FX):
     root = Path(company_folder)
     an = aa.Analysis("TOS", "TOS salary tax risk")
@@ -361,9 +441,31 @@ def build(company_folder, threshold=THRESHOLD, fx=FX):
     tot_sal = sum(r["salary"] for _, _, r, _ in res["decl"])
     tot_tax = sum(r["tax"] for _, _, r, _ in res["decl"])
     s("Total declared", f"Salary {tot_sal:,.0f} KHR; tax on salary {tot_tax:,.0f} KHR", None, "", "even")
+    comp = salary_compare(root, res["decl"], fx)
+    if comp:
+        cyear, crow, ctag, clines, cnotes = comp
+        for n in cnotes:
+            an.add_note(n)
+        base = clines[0][1]
+        for label, v in clines:
+            if label.startswith("TOS"):
+                s(f"Salary {cyear}: {label}", f"{base:,.0f} KHR", None, "Base for the comparison below", "section")
+                continue
+            if v is None:
+                s(f"Salary {cyear}: {label}", "Not provided", None, "", "even")
+                continue
+            d = base - v
+            ok = abs(d) <= max(1000, 0.05 * max(abs(base), abs(v)))
+            s(f"Salary {cyear}: {label}", f"{v:,.0f} KHR; TOS − this = {d:+,.0f}", None,
+              "" if ok else "Differs by more than 5 %: unreported staff / salary, or salary booked elsewhere. See 'Salary vs GL, TOI, bank'.",
+              "total" if ok else "error")
 
     an.view("Summary", ["Area", "Result", "Count", "Suggested audit action"], [r for r, _ in S], [t for _, t in S],
             money=[], desc=f"TOS salary tax risk, {period}. Threshold {thr}. Staff are matched by ID (name when no ID).")
+    if comp:
+        an.view("Salary vs GL, TOI, bank", ["Month", "TOS salary + FB", "TOS tax + FB tax", "GL salary", "Bank payroll paid",
+                                            "TOS − GL", "TOS − bank", "Status"], crow, ctag, money=[1, 2, 3, 4, 5, 6], month_col=0,
+                desc=f"{cyear}: salary declared in TOS each month vs GL salary accounts and bank payroll payments (5 % tolerance).")
     an.view("Monthly headcount", ["Month", "Note", "Total staff", "Khmer", "Foreign", "Foreign change", "Foreign joined",
                                   "Foreign left", f"Foreign ≤ {threshold / 1e6:g}M", "Salary base", "Tax on salary", "Fringe benefit", "Tax on FB"],
             head_rows, head_tags, money=[9, 10, 11, 12], month_col=0,

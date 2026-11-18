@@ -35,6 +35,8 @@ NATURE = [  # (nature, regex on description + supplier name); first match wins
                       r"audit|accounting|advertis|marketing|commission|training|design|install|labou?r|freight|"
                       r"logistic|courier|agent|broker|management|សេវា|ថ្លៃ|ជួសជុល|ដឹកជញ្ជូន|ប្រឹក្សា"),
 ]
+NON_TAXABLE = re.compile(r"បុគ្គល\s*មិន\s*ជាប់\s*អាករ|non[- ]?taxable\s+person|non[- ]?vat\s+person", re.I)
+TIN_FORMAT = re.compile(r"[A-Z]\d{3}\d{6,}")      # L001-100163327, K001-..., after removing - and spaces
 INDIVIDUAL = re.compile(r"individual|physical|person|natural|non[- ]?vat|non[- ]?registered|unregistered|រូបវន្ត|មិនមែន|មិនបាន", re.I)
 
 
@@ -108,17 +110,27 @@ def map_wht(labels, first_col):
     return cols
 
 
-def classify(desc, name, supplier_type, vat, imported, nonvat_amount):
-    """(nature, reason) for one PR line. Natures starting with 'Excluded' are not WHT."""
+def has_tin(tin):
+    return bool(TIN_FORMAT.fullmatch(_norm_tin(tin)))
+
+
+def classify(desc, name, supplier_type, vat, imported, tin="", type_column=True):
+    """(nature, reason) for one PR line. Natures starting with 'Excluded' are not WHT.
+    A WHT candidate must meet BOTH criteria: supplier type បុគ្គលមិនជាប់អាករ (non-taxable person) and no
+    tax registration number (TIN such as L001-XXXXXXXXX / K00X-XXXXXXXXX). Goods, assets and imports are not WHT."""
     if imported:
         return "Excluded: import", "Import columns used"
+    if has_tin(tin):
+        return "Excluded: registered taxpayer (has TIN)", f"TIN {tin}"
+    if type_column and not NON_TAXABLE.search(supplier_type or ""):
+        return "Excluded: supplier type", f"Supplier type '{supplier_type or 'blank'}' is not បុគ្គលមិនជាប់អាករ"
+    if not type_column and vat > 0:
+        return "Excluded: VAT invoice", "VAT shown on the PR line (no supplier-type column in this PR file)"
     text = f"{desc} {name}".casefold()
     nature = next((n for n, rx in NATURE if re.search(rx, text, re.I)), None)
-    if vat > 0 and not INDIVIDUAL.search(supplier_type or ""):
-        return "Excluded: VAT invoice", "VAT shown on the PR line (VAT-registered supplier)"
     if nature and nature.startswith("Excluded"):
         return nature, "Keyword in description / supplier"
-    why = "Non-VAT purchase" + ("; supplier type " + supplier_type if supplier_type else "")
+    why = ("បុគ្គលមិនជាប់អាករ, no TIN" if type_column else "No TIN, no VAT (no supplier-type column: check the type)")
     if nature:
         return nature, why
     return "Unclear", why + "; nature not shown: check the invoice (goods are not WHT)"
@@ -198,7 +210,7 @@ def build(company_folder, tol=TOL):
             vat = sum(aa.num(_cell(r, i)) for i in c["vat"])
             imported = any(aa.num(_cell(r, i)) for i in c["import"])
             stype, desc = _text(_cell(r, c["type"])), _text(_cell(r, c["desc"]))
-            nature, why = classify(desc, name, stype, vat, imported, None)
+            nature, why = classify(desc, name, stype, vat, imported, _text(_cell(r, c["tin"])), c["type"] is not None)
             d = aa.to_date(_cell(r, c["date"]))
             lines.append(dict(ym=ym, date=str(d) if d else _text(_cell(r, c["date"])), invoice=_text(_cell(r, c["invoice"])),
                               tin=_norm_tin(_cell(r, c["tin"])), tin_text=_text(_cell(r, c["tin"])), name=name, type=stype,
@@ -328,7 +340,7 @@ def build(company_folder, tol=TOL):
         S.append(([area, result, count, amount, action], tag))
     s("Period", f"{period}: {len(pr_files)} PR file(s), {len(wht_files)} WHT file(s), {len(lines):,} purchase lines", len(lines), None, "", "section")
     cand = [l for l in lines if not l["nature"].startswith("Excluded")]
-    s("WHT-type purchases in PR", "Services, rental, fees, interest, royalty and unclear lines from non-VAT suppliers",
+    s("WHT-type purchases in PR", "Supplier type បុគ្គលមិនជាប់អាករ AND no TIN: services, rental, management fees, interest, royalty, unclear",
       len(cand), sum(l["amount"] for l in cand), "See 'PR lines classified' (filter the Nature column).", "even")
     s("Declared in WHT (OK)", f"{len(ok):,} supplier-month(s) found in the WHT return", len(ok), sum(x["amount"] for x in ok),
       "See 'Declared OK'. No action.", "total")

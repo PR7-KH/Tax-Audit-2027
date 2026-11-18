@@ -34,19 +34,23 @@ class ToiAnalysisTest(unittest.TestCase):
     def test_cash_flow_reconciles_with_step10(self):
         make_toi(self.root)
         an = ta.build_cashflow(self.root)
-        lines = {r["Line"].strip(): r["Amount (KHR)"] for r in self.rows(an, "Cash flow")}
+        lines = {r["Line"].strip(): r["Amount (KHR)"] for r in self.rows(an, "Indirect method")}
         self.assertEqual(lines["Net cash from operating activities"], 200 * M)
         self.assertEqual(lines["Purchase of long-term assets (TOI step 10)"], -900 * M)
         self.assertEqual(lines["Net cash from financing activities"], 200 * M)
         self.assertEqual(lines["Net increase / (decrease) in cash"], -500 * M)
         self.assertEqual(lines["Difference (should be 0)"], 0)
-        self.assertIn("Step 10 assets", an.views)
+        self.assertNotIn("Step 10 assets", an.views)
+        direct = {r["Line"].strip(): r["Amount (KHR)"] for r in self.rows(an, "Direct method")}
+        self.assertEqual(direct["Cash received from customers"], (5000 - 400) * M)
+        self.assertEqual(direct["Net cash from operating activities"], 200 * M)
+        self.assertEqual(direct["Difference (should be 0)"], 0)
         self.assertTrue(any("cash decreased" in r["Finding"] for r in self.rows(an, "Findings")))
 
     def test_cash_flow_without_step10_derives_purchases(self):
         make_toi(self.root, step10=False)
         an = ta.build_cashflow(self.root)
-        lines = {r["Line"].strip(): r["Amount (KHR)"] for r in self.rows(an, "Cash flow")}
+        lines = {r["Line"].strip(): r["Amount (KHR)"] for r in self.rows(an, "Indirect method")}
         self.assertEqual(lines["Purchase of long-term assets (derived: change in A1 + depreciation)"], -900 * M)
         self.assertEqual(lines["Difference (should be 0)"], 0)
 
@@ -55,7 +59,7 @@ class ToiAnalysisTest(unittest.TestCase):
         make_toi(self.root, values={"A7": (2400, 2000), "A1": (3400, 3000), "A0": (5600, 4900), "A28": (5600, 4900),
                                     "A38": (3000, 3000), "A37": (3000, 3000)})
         an = ta.build_cashflow(self.root)
-        lines = {r["Line"].strip(): r["Amount (KHR)"] for r in self.rows(an, "Cash flow")}
+        lines = {r["Line"].strip(): r["Amount (KHR)"] for r in self.rows(an, "Indirect method")}
         self.assertEqual(lines["Disposals / other movements in long-term assets (balancing)"], 200 * M)
         self.assertEqual(lines["Difference (should be 0)"], 0)
 
@@ -77,10 +81,13 @@ class ToiAnalysisTest(unittest.TestCase):
         make_toi(self.root, values={"A37": (7000, 3000), "A38": (7000, 3000), "A29": (-2720, 700), "B7": (-100, 1400),
                                     "B22": (4000, 1500)})
         checks = {r[0]: r for r in ta.key_checks(ta.load(self.root)[0])}
-        self.assertEqual(checks["Debt greater than assets"][3], "Check")
-        self.assertEqual(checks["Negative equity"][3], "Check")
-        self.assertEqual(checks["Gross profit negative"][3], "Check")
-        self.assertEqual(checks["Operating expenses greater than cost of sales"][3], "Check")
+        self.assertEqual(checks["Debt greater than assets"][4], "Check")
+        self.assertEqual(checks["Debt greater than assets"][1], "A37+A42 vs A0")
+        self.assertEqual(checks["Negative equity"][4], "Check")
+        self.assertEqual(checks["Gross profit negative"][4], "Check")
+        self.assertEqual(checks["Operating expenses greater than cost of sales"][4], "Check")
+        self.assertEqual(checks["Entertainment expense (B29)"][1], "B29")
+        self.assertEqual(checks["Opening stock D1 vs prior-year closing A15"][1], "D1 vs A15")
 
     def test_no_toi(self):
         an = ta.build_ratios(self.root)
@@ -117,6 +124,9 @@ class AdtTemplateTest(unittest.TestCase):
             self.assertEqual(c.value("ADT", key["KEY1"], 10), "Check")     # profit made but cash fell
             self.assertEqual(c.value("ADT", key["KEY3"], 10), "OK")        # debt not over assets
             self.assertEqual(c.value("ADT", key["A22"], 10), "Check")
+            hidden = {r for r in range(1, d.max_row + 1) if d.row_dimensions[r].hidden}
+            self.assertNotIn(key["A22"] + engine.ADT_OFFSET, hidden)       # flagged: shown on the dashboard
+            self.assertIn(key["KEY3"] + engine.ADT_OFFSET, hidden)          # OK: hidden there, still in ADT
 
 
 class FitWidthsTest(unittest.TestCase):
@@ -204,3 +214,63 @@ class DownloadRoutingTest(unittest.TestCase):
         self.assertEqual(it.classify_download("Audited financial statements.docx")[0], "Audit Report")
         self.assertEqual(it.classify_download("AP aging 2025.xlsx")[0], "AP")
         self.assertIsNone(it.classify_download("memo.docx")[0])
+
+
+class TaxPaidTest(unittest.TestCase):
+    PDF_ROWS = [  # what pdfplumber returns for the GDT Payment History table (garbled Khmer, English kept)
+        ["ល.រ\nNo.", "Type of Tax", "January"] + [""] * 11 + ["Total"],
+        ["1", "2025", "28,222,356", "20,317,574"] + ["1,000"] * 10 + ["48,559,930"],
+        ["", " ប  ំ   ំ2025", "", None] + [None] * 12,
+        ["1", "\x00\x00 ពន  ៉តង់\nPatent Tax", None, "5,000,000"] + ["-"] * 11 + ["5,000,000"],
+        ["2", "ពន េល\nSalary Tax", None, "14,443,236", "11,578,354"] + ["0"] * 10 + ["26,021,590"],
+        ["13", "កៃ\x00ម\ne-Filing for Windows Desktop Application\nLicense Fee"] + ["-"] * 7 + ["400,000"] + ["-"] * 4 + ["400,000"],
+    ]
+
+    def test_pdf_rows(self):
+        import tax_paid as tp
+        rows = tp.parse_rows(self.PDF_ROWS, "x.pdf")
+        self.assertEqual([r[1] for r in rows], ["Patent Tax", "Salary Tax", "e-Filing for Windows Desktop Application License Fee"])
+        self.assertEqual(rows[1][3][:2], [14443236.0, 11578354.0])
+        self.assertEqual(rows[2][3][7], 400000.0)                      # August
+        self.assertEqual(rows[0][0], 2025)
+
+    def test_info_sheets_and_compare_with_tos(self):
+        import tax_paid as tp
+        from openpyxl import Workbook
+        from test_audit_analysis import make_tos
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            make_tos(root)                                  # TOS tax 10 % of salary each month of 2025
+            wb = Workbook(); wb.active.title = "Sheet1"
+            ws = wb.create_sheet("Sheet3")
+            ws.append(["ល.រ", "ឆ្នាំបង់ពន្ធ"] + ["m"] * 12 + ["សរុប"])
+            ws.append([1, 2025] + [1] * 12 + [12])
+            ws.append([1, "ពន្ធលើប្រាក់បៀវត្ស"] + [2270000] * 12 + [27240000])
+            ws.append([None, "Salary Tax"])
+            (root / "Info").mkdir()
+            wb.save(root / "Info" / "info.xlsx")
+            an = tp.build(root)
+            detail = an.views["Monthly detail"].rows
+            self.assertEqual(detail[0][1], "Salary Tax")
+            cmp_ = an.views["Paid vs declared"].rows
+            self.assertTrue(any(r[6] == "Agrees" for r in cmp_))
+            self.assertTrue(any(r[6] != "Agrees" for r in cmp_))   # later months declared less (staff left)
+
+
+class DashboardTest(unittest.TestCase):
+    def test_collects_flags_from_every_area(self):
+        import risk_dashboard as rd
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            make_toi(root)
+            an = {"an_RATIO": ta.build_ratios(root), "an_CASHFLOW": ta.build_cashflow(root)}
+            report = {"findings": [{"sev": "High", "area": "Sales", "title": "SR below GL", "amount": 5, "evidence": "x", "action": "y"}]}
+            dash = rd.build(root, an, report)
+            rows = dash.views["Risk summary"].rows
+            areas = {r[0] for r in rows}
+            self.assertIn("1. TOI key risk checks", areas)
+            self.assertIn("6. Sales tie-out (tax risk finding)", areas)
+            key = [r for r in rows if r[1] == "Profit made but cash decreased"][0]
+            self.assertEqual((key[2], key[5]), ("B48 vs A21+A22", "High"))
+            overview = {r[1]: r[3] for r in rows if r[0] == "Overview"}
+            self.assertEqual(overview["9. Salary tax (TOS)"], "Not run: source files missing")

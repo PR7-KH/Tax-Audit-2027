@@ -59,7 +59,7 @@ row). Raw extractions stay under `.pdf-extractions` with source-hash history in
 `.tax-audit-conversions.json`; when the PDF holds a real table, a standard Excel with the
 **same name as the PDF** is saved next to it and the row turns ✓. See "Source inspect" below.
 
-The update bundle includes thirty files, including the Tax Audit Tools/search
+The update bundle includes thirty-two files, including the Tax Audit Tools/search
 modules, `assets/meeting_note_template.docx` and `assets/tax_laws.json`.
 Copy the **assets folder** too, and rerun
 the Mac installer to install python-docx. Selecting a new
@@ -297,3 +297,30 @@ or OCR it. No conversion to Word is needed for a normal (text) PDF.
 * **Audit analysis → A/R & A/P**: listing totals vs TOI (A18 / A46), GL closing balances and the audited
   figure; aging from the listing's bucket columns (or from invoice dates to 31 December); per customer /
   supplier with balances over one year, credit / debit balances and large shares flagged.
+
+### Audit Dashboard = one risk summary; menu groups; Tax Payment History
+
+**Menu groups:** OVERVIEW (Audit Dashboard) · TAX RETURNS (TOIs, MTR, Consolidated data, Tax Payment
+History) · TOI & FINANCIALS (Ratio analysis, Cash flow, Audit report vs TOI) · TAX RISK TESTS (Tax risk
+finding, Revenue, Expense, TOS, WHT, A/R & A/P) · ACCOUNTING RECORDS (Sales, GL, Bank, TB, A/R, A/P,
+Expense records) · TOOLS (Tax Audit Tools, Processing log). Tax Audit Tools tabs use larger text.
+
+**Audit Dashboard** collects every flagged item from every test in one table: an overview line per
+area (High / Medium counts, or "Not run" when files are missing), then the items: TOI key risk checks,
+ADT line rules flagged Check, ratio flags, cash-flow findings, audit report vs TOI, the sales tie-out,
+revenue, expense, TOS, WHT, tax payments and A/R & A/P, each with TOI code / source, finding, amount,
+severity, suggested action and where to look. **ADT (all TOI items)** shows every template line.
+In the exported workbook, the Audit Dashboard sheet shows only the rows flagged Check (the others are
+hidden rows); the ADT sheet keeps every line. The "Fill blank ADT links" box is gone: the template links
+every line.
+
+**Tax Payment History** (was Tax Paid Summary): reads the GDT Payment History PDF and Excel files with the
+same layout from a **Tax Paid** folder, and Info Sheet2 / Sheet3; the most complete copy of each year is
+used. Views: Summary, By year (tax type × year with change), Monthly detail (as in the statement), By
+month (salary tax, FBT, WHT, prepayment, annual income tax, VAT, other) and Paid vs declared (TOS, WHT and
+1 % prepayment vs the monthly returns; annual income tax vs TOI B47).
+
+Also: Key risk checks show the TOI codes; Cash flow shows the **indirect** and **direct** methods (step 10
+is used for asset purchases, not shown as a view); TOS compares 12 months of salary with the GL salary
+accounts, TOI (B23 + C8) and bank payroll payments; WHT candidates must have supplier type
+**បុគ្គលមិនជាប់អាករ** and no TIN (L001-… / K00X-…).

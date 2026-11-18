@@ -13,7 +13,10 @@ class AuditToolsPanel(tk.Frame):
         super().__init__(parent,bg='#f0f4f8')
         self.app=app;self.loaded_folder=None;self.last_meeting=None;self.last_request=None
         self.company=[];self.item_vars=[];self.item_labels=[];self.fields={}
-        tabs=self.tabs=ttk.Notebook(self);tabs.pack(fill='both',expand=True)
+        style=ttk.Style(self)
+        style.configure('Tools.TNotebook.Tab',font=('Helvetica',15,'bold'),padding=(22,10))
+        style.map('Tools.TNotebook.Tab',background=[('selected','#087f8c')],foreground=[('selected','white')])
+        tabs=self.tabs=ttk.Notebook(self,style='Tools.TNotebook');tabs.pack(fill='both',expand=True)
         request=ttk.Frame(tabs);meeting=ttk.Frame(tabs)
         tabs.add(request,text='Document Request');tabs.add(meeting,text='Meeting Notes')
         self.law_panel=TaxLawPanel(tabs);tabs.add(self.law_panel,text='Tax Law Search')
